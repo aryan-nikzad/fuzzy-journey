@@ -53,6 +53,12 @@ USAGE
     # Preview a specific date instead of today
     python3 prayer_aio.py --date 15-03-2026
 
+    # Add 30 min of flexible work time on top of the work target (schedule only)
+    python3 prayer_aio.py --flex-time 00:30
+
+    # Remove any flex time again (schedule rebuilt from raw, no flex time)
+    python3 prayer_aio.py --reset-flex
+
     # Different location / year
     python3 prayer_aio.py --city tehran --year 2027 --lat 35.6892 --lon 51.3890
 
@@ -140,6 +146,9 @@ SCHEDULE_FIELDNAMES = [
     "WorkTarget_75", "WorkOverflow_75",
     "MorningBlockStart_75", "MorningBlockEnd_75",
     "EveningBlockStart_75", "EveningBlockEnd_75",
+
+    # ---- flex time (added to the work target when requested) --------
+    "FlexTime",
 
     # ---- wake / sleep, 50% plan --------------------------------------
     "WakeTime_50", "BedTime_50", "AwakeDuration_50",
@@ -242,6 +251,30 @@ def timedelta_to_string(duration: timedelta) -> str:
     return f"{hours:02d}:{minutes:02d}"
 
 
+def parse_hhmm(value: str) -> timedelta:
+    """
+    Parse an 'HH:MM' string into a timedelta for --flex-time.
+    Used as an argparse ``type=`` callback, so a bad value raises a
+    clean argparse error instead of a traceback.
+    """
+    parts = value.split(":")
+    if len(parts) != 2:
+        raise argparse.ArgumentTypeError(
+            f"expected HH:MM, got: {value!r}"
+        )
+    try:
+        hours, minutes = int(parts[0]), int(parts[1])
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"expected integer hours/minutes in HH:MM, got: {value!r}"
+        )
+    if hours < 0 or minutes < 0 or minutes >= 60:
+        raise argparse.ArgumentTypeError(
+            f"minutes must be 00-59 and value non-negative, got: {value!r}"
+        )
+    return timedelta(hours=hours, minutes=minutes)
+
+
 # ================================================================
 # STEP 3 - TWO-BLOCK WORK SCHEDULE
 # ================================================================
@@ -256,18 +289,26 @@ class WorkBlocks:
     block2_end: datetime
 
 
-def calculate_work_blocks(fajr: datetime, isha: datetime, percentage: float) -> WorkBlocks:
+def calculate_work_blocks(
+    fajr: datetime, isha: datetime, percentage: float, flex: timedelta = timedelta(0)
+) -> WorkBlocks:
     """
-    Split `percentage` of the Fajr -> Isha window into two blocks:
+    Split `percentage` of the Fajr -> Isha window into two blocks, then add
+    any `flex` time on top of that target:
 
         Block 1: Fajr -> 14:00 (as much of the target as fits)
         Block 2: 18:00 -> onward (whatever didn't fit in block 1)
+
+    The flex time is folded straight into the target and re-allocated
+    through the same block logic, so it lands in Block 1 whenever Block 1
+    still has room before 14:00 and otherwise spills into Block 2 — i.e.
+    "add it to the first block if it has space, else to the second".
     """
     total_duration = isha - fajr
     if total_duration.total_seconds() < 0:
         total_duration += timedelta(days=1)
 
-    target = total_duration * percentage
+    target = total_duration * percentage + flex
 
     limit_14 = fajr.replace(hour=14, minute=0, second=0, microsecond=0)
     if limit_14 < fajr:
@@ -299,13 +340,18 @@ def calculate_work_blocks(fajr: datetime, isha: datetime, percentage: float) -> 
 # STEP 4 - BUILD THE SCHEDULE ROWS
 # ================================================================
 
-def build_schedule(raw_rows: list[dict]) -> list[dict]:
+def build_schedule(raw_rows: list[dict], flex: timedelta = timedelta(0)) -> list[dict]:
     """
     Turn raw API rows into fully-populated schedule rows.
 
     Each output row is built FRESH (rather than mutating the input
     dict), so it can never end up with stray keys that don't match
     SCHEDULE_FIELDNAMES.
+
+    `flex` is extra work time added on top of the % work target (see
+    calculate_work_blocks()). It is a generation-time input only: the
+    schedule is always rebuilt from `raw_rows`, so re-running never
+    double-counts it.
     """
     n = len(raw_rows)
     schedule: list[dict] = [dict.fromkeys(SCHEDULE_FIELDNAMES, "") for _ in range(n)]
@@ -344,9 +390,11 @@ def build_schedule(raw_rows: list[dict]) -> list[dict]:
             out["NighttimeDuration"] = duration_string(sunset, next_sunrise)
             out["IshaToNextFajrDuration"] = duration_string(isha, next_fajr)
 
-        # ---- 50% / 75% two-block schedule ------------------------
+        # ---- flex time + 50% / 75% two-block schedule --------------
+        # Flex time is written once per row; it feeds both plans below.
+        out["FlexTime"] = timedelta_to_string(flex)
         for pct, suffix in ((0.50, "50"), (0.75, "75")):
-            blocks = calculate_work_blocks(fajr, isha, pct)
+            blocks = calculate_work_blocks(fajr, isha, pct, flex)
             out[f"WorkTarget_{suffix}"] = timedelta_to_string(blocks.total)
             out[f"WorkOverflow_{suffix}"] = timedelta_to_string(blocks.remain)
             out[f"MorningBlockStart_{suffix}"] = blocks.block1_start.strftime("%H:%M")
@@ -509,11 +557,15 @@ def print_plan(row: dict, suffix: str) -> None:
         "  Morning block",
         f"{row[f'MorningBlockStart_{pct}']} - {row[f'MorningBlockEnd_{pct}']}",
     )
+    line("  Noon block (free)", "14:00 - 18:00", "wellbeing / other tasks")
     line(
         "  Evening block",
         f"{row[f'EveningBlockStart_{pct}']} - {row[f'EveningBlockEnd_{pct}']}",
     )
     line("  Total work target", row[f"WorkTarget_{pct}"])
+    flex = row["FlexTime"]
+    if flex != "00:00":
+        line("  + Flex time", flex, "added on top of the %s%% target" % pct)
     overflow = row[f"WorkOverflow_{pct}"]
     if overflow != "00:00":
         line("  Overflow to evening", overflow, "didn't fit before 14:00")
@@ -538,31 +590,44 @@ def print_plan_filters(plans: list[str]) -> None:
     print(f"  Showing only: {label} plan(s)")
 
 
-def print_today_summary(row: dict, target_date: date, plans: list[str] | None = None) -> None:
+def print_today_summary(
+    row: dict, target_date: date, plans: list[str] | None = None, schedule_only: bool = False
+) -> None:
     if plans is None:
         plans = ["50", "75"]
+
+    # ---- flex-time warning (shown whenever any flex time is applied) --------
+    flex = row.get("FlexTime", "00:00")
+    if flex and flex != "00:00":
+        print(DLINE)
+        print(f"  ! FLEX TIME APPLIED: {flex} is added to the work target(s) below.")
+        print("    It is stored per day in the schedule CSV; clear it with --reset-flex.")
+        print(DLINE)
+        print()
+
     print(DLINE)
     print(f" SCHEDULE FOR {target_date.strftime('%A, %d %B %Y')}")
     print(DLINE)
 
-    section("PRAYER / SUN TIMES")
-    line("Imsak", row["Imsak"], "fasting begins")
-    line("Fajr", row["Fajr"], "dawn prayer")
-    line("Sunrise", row["Sunrise"])
-    line("Dhuhr", row["Dhuhr"], "noon prayer")
-    line("Asr", row["Asr"], "afternoon prayer")
-    line("Sunset", row["Sunset"])
-    line("Maghrib", row["Maghrib"], "sunset prayer")
-    line("Isha", row["Isha"], "night prayer")
-    line("Midnight", row["Midnight"], "Islamic midpoint of the night")
-    line("First third of night", row["FirstThirdOfNight"])
-    line("Last third of night", row["LastThirdOfNight"])
+    if not schedule_only:
+        section("PRAYER / SUN TIMES")
+        line("Imsak", row["Imsak"], "fasting begins")
+        line("Fajr", row["Fajr"], "dawn prayer")
+        line("Sunrise", row["Sunrise"])
+        line("Dhuhr", row["Dhuhr"], "noon prayer")
+        line("Asr", row["Asr"], "afternoon prayer")
+        line("Sunset", row["Sunset"])
+        line("Maghrib", row["Maghrib"], "sunset prayer")
+        line("Isha", row["Isha"], "night prayer")
+        line("Midnight", row["Midnight"], "Islamic midpoint of the night")
+        line("First third of night", row["FirstThirdOfNight"])
+        line("Last third of night", row["LastThirdOfNight"])
 
-    section("DAY / NIGHT LENGTH")
-    line("Daylight duration", row["DaylightDuration"], "Sunrise -> Sunset")
-    line("Nighttime duration", row["NighttimeDuration"], "Sunset -> next Sunrise")
-    line("Fajr-to-Isha duration", row["FajrToIshaDuration"])
-    line("Isha-to-next-Fajr duration", row["IshaToNextFajrDuration"])
+        section("DAY / NIGHT LENGTH")
+        line("Daylight duration", row["DaylightDuration"], "Sunrise -> Sunset")
+        line("Nighttime duration", row["NighttimeDuration"], "Sunset -> next Sunrise")
+        line("Fajr-to-Isha duration", row["FajrToIshaDuration"])
+        line("Isha-to-next-Fajr duration", row["IshaToNextFajrDuration"])
 
     for suffix in ("50", "75"):
         if suffix in plans:
@@ -613,26 +678,39 @@ def parse_args() -> argparse.Namespace:
         description="All-in-one prayer-times fetch / generate / show tool.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--today", action="store_true",
+    # Short aliases (first char of the long flag, upper-cased where it would
+    # otherwise collide, e.g. -t today / -T tomorrow, -l lat / -L lon).
+    parser.add_argument("--today", "-t", action="store_true",
                         help="Only show today's schedule; never download or change files.")
-    parser.add_argument("--override", action="store_true",
+    parser.add_argument("--override", "-o", action="store_true",
                         help="Regenerate even if the CSVs already exist (old files are backed up first).")
-    parser.add_argument("--no-show", action="store_true",
+    parser.add_argument("--no-show", "-n", action="store_true",
                         help="After generating, do not print today's schedule.")
-    parser.add_argument("--date", help="Show a specific date instead of today (DD-MM-YYYY).")
-    parser.add_argument("--tomorrow", action="store_true",
+    parser.add_argument("--date", "-d", help="Show a specific date instead of today (DD-MM-YYYY).")
+    parser.add_argument("--tomorrow", "-T", action="store_true",
                         help="Show tomorrow's schedule instead of today's.")
-    parser.add_argument("--50", dest="fifty", action="store_true",
+    parser.add_argument("--50", "-f", dest="fifty", action="store_true",
                         help="Show only the 50%% work/sleep plan.")
-    parser.add_argument("--75", dest="seventyfive", action="store_true",
+    parser.add_argument("--75", "-s", dest="seventyfive", action="store_true",
                         help="Show only the 75%% work/sleep plan.")
-    parser.add_argument("--file", help="Show an existing schedule CSV by path (implies --today).")
+    parser.add_argument("--schedule-only", "-S", action="store_true",
+                        help="Hide the prayer / sun times and day / night-length sections; "
+                             "show only the 50%% / 75%% wake/work/sleep plans (respecting --50 / --75).")
+    parser.add_argument("--file", "-p", help="Show an existing schedule CSV by path (implies --today).")
 
-    parser.add_argument("--city", default=CITY_SLUG, help="City name (used for the filename).")
-    parser.add_argument("--year", type=int, default=YEAR, help="Year to fetch.")
-    parser.add_argument("--lat", type=float, default=LATITUDE, help="Latitude.")
-    parser.add_argument("--lon", type=float, default=LONGITUDE, help="Longitude.")
-    parser.add_argument("--method", type=int, default=METHOD, help="AlAdhan calculation method.")
+    parser.add_argument("--flex-time", "-w", type=parse_hhmm, default=None,
+                        help="Extra flexible work time (HH:MM) added to the work target and "
+                             "re-allocated into the work blocks. Schedule only; raw data "
+                             "is never changed. Pass 00:00 to remove it.")
+    parser.add_argument("--reset-flex", "-r", action="store_true",
+                        help="Remove all flex time (set to 00:00) by regenerating the "
+                             "schedule from raw (no flex time).")
+
+    parser.add_argument("--city", "-c", default=CITY_SLUG, help="City name (used for the filename).")
+    parser.add_argument("--year", "-y", type=int, default=YEAR, help="Year to fetch.")
+    parser.add_argument("--lat", "-l", type=float, default=LATITUDE, help="Latitude.")
+    parser.add_argument("--lon", "-L", type=float, default=LONGITUDE, help="Longitude.")
+    parser.add_argument("--method", "-m", type=int, default=METHOD, help="AlAdhan calculation method.")
 
     return parser.parse_args()
 
@@ -702,7 +780,7 @@ def main() -> None:
         print(f"Date                  : {target_date.strftime(CSV_DATE_FORMAT)} "
               f"({target_date.strftime('%A, %d %B %Y')})")
         print_plan_filters(plans)
-        print_today_summary(row, target_date, plans)
+        print_today_summary(row, target_date, plans, schedule_only=args.schedule_only)
         return 0
 
     # -----------------------------------------------------------
@@ -712,58 +790,114 @@ def main() -> None:
         return show_schedule(Path(args.file))
 
     # -----------------------------------------------------------
-    # --today (or a --date preview without --override): show-only.
+    # VIEW PATH: show existing data without downloading or changing
+    # files. --schedule-only is a pure view option too — unless the
+    # user also asks to generate (--override / --flex-time /
+    # --reset-flex), in which case it falls through to the normal
+    # (generate) path and the schedule-only filter is applied on show.
     # -----------------------------------------------------------
-    if args.today or (args.date and not args.override):
+    if args.file:
+        return show_schedule(Path(args.file))
+
+    if args.today or args.tomorrow or (args.date and not args.override):
+        return show_schedule()
+
+    if args.schedule_only and not (
+        args.override or args.flex_time is not None or args.reset_flex
+    ):
         return show_schedule()
 
     # -----------------------------------------------------------
-    # NORMAL PATH: decide whether to download or preserve existing data.
+    # NORMAL PATH: decide what to (re)generate.
+    #
+    #   raw   = prayer times (only ever changed by a fetch / --override)
+    #   sched = derived schedule, ALWAYS rebuilt from raw — it is never
+    #           edited in place, so a flex-time change only touches it.
+    #
+    #   need_download = we must hit the API (override, or raw is gone).
+    #   want_schedule = we must rebuild the schedule (override, flex
+    #                   time changed/reset, or the schedule is missing).
+    #                   Note: if only the schedule is missing and the raw
+    #                   file is already there, we recalc with NO download.
     # -----------------------------------------------------------
     raw_exists = csv_matches_header(RAW_FILE, RAW_FIELDNAMES)
     sched_exists = csv_matches_header(SCHEDULE_FILE, SCHEDULE_FIELDNAMES)
-    do_download = args.override or not (raw_exists and sched_exists)
+
+    # Resolve the flex-time input for this run.
+    if args.reset_flex:
+        flex: Optional[timedelta] = timedelta(0)  # reset -> 00:00
+    else:
+        flex = args.flex_time  # a timedelta, or None if --flex-time absent
+
+    want_schedule = (
+        args.override
+        or args.flex_time is not None
+        or args.reset_flex
+        or not sched_exists
+    )
+    need_download = args.override or not raw_exists
 
     # Warn if the existing schedule doesn't cover the target date (stale).
-    if not do_download:
+    if not need_download and not want_schedule:
         rows = load_rows(SCHEDULE_FILE)
         if find_row_for_date(rows, target_date) is None:
             print(f"Note: existing schedule does not contain "
                   f"{target_date.strftime(CSV_DATE_FORMAT)} —")
             print("      re-run with --override to refresh it.")
 
-    if not do_download:
+    # Preserve everything when there is genuinely nothing to regenerate.
+    if not need_download and not want_schedule:
         print("✓ Data already present — PRESERVED (nothing downloaded or overwritten).")
         print(f"  Raw     : {RAW_FILE}")
         print(f"  Schedule: {SCHEDULE_FILE}")
         print("Use --override to regenerate (existing files are backed up first).")
+        print("Use --flex-time HH:MM to add flex time, or --reset-flex to clear it.")
         print()
         return show_schedule()
 
-    # Download requested (or forced via --override).
+    # ---- backups ----
     if args.override and (raw_exists or sched_exists):
         print("⚠ Override requested — backing up existing files first.")
         backup_existing_files()
-    elif raw_exists or sched_exists:
+
+    # ---- explain what we are about to do ----
+    if need_download and not args.override and (raw_exists or sched_exists):
         missing = [p.name for p in (RAW_FILE, SCHEDULE_FILE) if not p.is_file()]
         print(f"Missing files detected ({', '.join(missing)}) — downloading to complete the set.")
+    elif not need_download and not sched_exists and raw_exists:
+        print("Schedule file missing — recalculating schedule from the existing "
+              "raw data (no download needed).")
 
-    # ---- fetch + generate ----
-    try:
-        raw_rows = fetch_year(args.year, args.lat, args.lon, args.method)
-    except RuntimeError as exc:
-        print(f"\n✗ Fetch failed: {exc}")
-        return 1
+    if args.reset_flex:
+        print("Flex time cleared (00:00) — schedule rebuilt from raw, no flex time.")
+    elif args.flex_time is not None:
+        print(f"Flex time set to {timedelta_to_string(args.flex_time)} — added to the "
+              "work target (schedule only; raw data is left untouched).")
 
-    if not raw_rows:
-        print("✗ No data returned from the API.")
-        return 1
+    # ---- fetch raw (only when we must) ----
+    raw_rows: Optional[list[dict]] = None
+    if need_download:
+        try:
+            raw_rows = fetch_year(args.year, args.lat, args.lon, args.method)
+        except RuntimeError as exc:
+            print(f"\n✗ Fetch failed: {exc}")
+            return 1
 
-    write_csv(raw_rows, RAW_FIELDNAMES, RAW_FILE)
+        if not raw_rows:
+            print("✗ No data returned from the API.")
+            return 1
 
-    log.info("Calculating schedule for %d days ...", len(raw_rows))
-    schedule_rows = build_schedule(raw_rows)
-    write_csv(schedule_rows, SCHEDULE_FIELDNAMES, SCHEDULE_FILE)
+        write_csv(raw_rows, RAW_FIELDNAMES, RAW_FILE)
+
+    # ---- build + write schedule (only when we must) ----
+    if want_schedule:
+        if raw_rows is None:
+            # We are only (re)building the schedule; the raw data is already
+            # on disk. Load it so the schedule is always generated from raw.
+            raw_rows = load_rows(RAW_FILE)
+        log.info("Calculating schedule for %d days ...", len(raw_rows))
+        schedule_rows = build_schedule(raw_rows, flex if flex is not None else timedelta(0))
+        write_csv(schedule_rows, SCHEDULE_FIELDNAMES, SCHEDULE_FILE)
 
     # ---- done ----
     print()
