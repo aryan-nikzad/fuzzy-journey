@@ -77,7 +77,7 @@ OUTPUT_DIR = Path(".")
 RAW_FILE = OUTPUT_DIR / f"{CITY_SLUG}_prayer_times_{YEAR}_raw.csv"
 SCHEDULE_FILE = OUTPUT_DIR / f"{CITY_SLUG}_prayer_times_{YEAR}_schedule.csv"
 
-# Names as they appear in the AlAdhan API response.
+# Names as they appear in the AlAdhan API response (used to read the JSON).
 API_TIME_FIELDS = [
     "Fajr",
     "Sunrise",
@@ -92,18 +92,66 @@ API_TIME_FIELDS = [
     "Lastthird",
 ]
 
-RAW_FIELDNAMES = ["Date", *API_TIME_FIELDS]
+# Clean, human-readable equivalents used in both output files.
+API_FIELD_TO_CLEAN_NAME = {
+    "Fajr": "Fajr",
+    "Sunrise": "Sunrise",
+    "Dhuhr": "Dhuhr",
+    "Asr": "Asr",
+    "Sunset": "Sunset",
+    "Maghrib": "Maghrib",
+    "Isha": "Isha",
+    "Imsak": "Imsak",
+    "Midnight": "Midnight",
+    "Firstthird": "FirstThirdOfNight",  # start of the night's first third
+    "Lastthird": "LastThirdOfNight",    # start of the night's last third
+}
+
+RAW_FIELDNAMES = ["Date", *API_FIELD_TO_CLEAN_NAME.values()]
 
 SCHEDULE_FIELDNAMES = [
     "Date",
-    "Fajr", "Rise", "Dhuhr", "Asr", "Set", "Maghrib", "Isha",
-    "Imsak", "Midnight", "FirstThird", "LastThird",
-    "DayLen", "NightLen", "LightLen", "DarkLen",
-    "W50", "W50Rem", "W50B1Start", "W50B1End", "W50B2Start", "W50B2End",
-    "W75", "W75Rem", "W75B1Start", "W75B1End", "W75B2Start", "W75B2End",
-    "Wake50", "Bed50", "Awake50", "Sleep50", "SleepDef50",
-    "Wake75", "Bed75", "Awake75", "Sleep75", "SleepDef75",
-    "Today",
+    # ---- prayer / sun times, straight from the API -----------------
+    "Fajr", "Sunrise", "Dhuhr", "Asr", "Sunset", "Maghrib", "Isha",
+    "Imsak", "Midnight", "FirstThirdOfNight", "LastThirdOfNight",
+
+    # ---- day / night lengths ----------------------------------------
+    "DaylightDuration",        # Sunrise -> Sunset
+    "NighttimeDuration",       # Sunset -> next day's Sunrise
+    "FajrToIshaDuration",      # Fajr -> Isha
+    "IshaToNextFajrDuration",  # Isha -> next day's Fajr
+
+    # ---- 50% two-block work schedule ---------------------------------
+    "WorkTarget_50",         # 50% of Fajr->Isha
+    "WorkOverflow_50",       # portion that didn't fit before 14:00, pushed to evening
+    "MorningBlockStart_50",  # = Fajr
+    "MorningBlockEnd_50",    # capped at 14:00
+    "EveningBlockStart_50",  # = 18:00
+    "EveningBlockEnd_50",
+
+    # ---- 75% two-block work schedule ---------------------------------
+    "WorkTarget_75",
+    "WorkOverflow_75",
+    "MorningBlockStart_75",
+    "MorningBlockEnd_75",
+    "EveningBlockStart_75",
+    "EveningBlockEnd_75",
+
+    # ---- wake / sleep, 50% plan ---------------------------------------
+    "WakeTime_50",       # = Fajr
+    "BedTime_50",        # later of EveningBlockEnd_50 or Isha
+    "AwakeDuration_50",  # WakeTime_50 -> BedTime_50
+    "SleepDuration_50",  # BedTime_50 -> next day's Fajr
+    "SleepDeficit_50",   # shortfall vs. the default Isha->Fajr sleep window
+
+    # ---- wake / sleep, 75% plan ---------------------------------------
+    "WakeTime_75",
+    "BedTime_75",
+    "AwakeDuration_75",
+    "SleepDuration_75",
+    "SleepDeficit_75",
+
+    "IsToday",  # "X" on the row matching today's date
 ]
 
 logging.basicConfig(
@@ -145,9 +193,9 @@ def fetch_year(year: int, latitude: float, longitude: float, method: int) -> lis
             timings = day["timings"]
 
             row = {"Date": day["date"]["gregorian"]["date"]}
-            for field in API_TIME_FIELDS:
+            for api_field, clean_name in API_FIELD_TO_CLEAN_NAME.items():
                 # "04:04 (+0330)" -> "04:04"
-                row[field] = timings[field].split(" ")[0]
+                row[clean_name] = timings[api_field].split(" ")[0]
 
             rows.append(row)
 
@@ -277,62 +325,62 @@ def build_schedule(raw_rows: list[dict]) -> list[dict]:
         sunset = parse_time(raw["Sunset"])
         isha = parse_time(raw["Isha"])
 
-        # ---- original times (renamed for readability) -----------
+        # ---- original times (copied straight through) -------------
         out["Date"] = raw["Date"]
         out["Fajr"] = raw["Fajr"]
-        out["Rise"] = raw["Sunrise"]
+        out["Sunrise"] = raw["Sunrise"]
         out["Dhuhr"] = raw["Dhuhr"]
         out["Asr"] = raw["Asr"]
-        out["Set"] = raw["Sunset"]
+        out["Sunset"] = raw["Sunset"]
         out["Maghrib"] = raw["Maghrib"]
         out["Isha"] = raw["Isha"]
         out["Imsak"] = raw["Imsak"]
         out["Midnight"] = raw["Midnight"]
-        out["FirstThird"] = raw["Firstthird"]
-        out["LastThird"] = raw["Lastthird"]
+        out["FirstThirdOfNight"] = raw["FirstThirdOfNight"]
+        out["LastThirdOfNight"] = raw["LastThirdOfNight"]
 
         # ---- day / night lengths ---------------------------------
-        out["DayLen"] = duration_string(sunrise, sunset)
-        out["LightLen"] = duration_string(fajr, isha)
+        out["DaylightDuration"] = duration_string(sunrise, sunset)
+        out["FajrToIshaDuration"] = duration_string(fajr, isha)
 
         if next_raw is not None:
             next_sunrise = parse_time(next_raw["Sunrise"])
             next_fajr = parse_time(next_raw["Fajr"])
-            out["NightLen"] = duration_string(sunset, next_sunrise)
-            out["DarkLen"] = duration_string(isha, next_fajr)
+            out["NighttimeDuration"] = duration_string(sunset, next_sunrise)
+            out["IshaToNextFajrDuration"] = duration_string(isha, next_fajr)
 
         # ---- 50% / 75% two-block schedule ------------------------
-        for pct, prefix in ((0.50, "W50"), (0.75, "W75")):
+        for pct, suffix in ((0.50, "50"), (0.75, "75")):
             blocks = calculate_work_blocks(fajr, isha, pct)
-            out[prefix] = timedelta_to_string(blocks.total)
-            out[f"{prefix}Rem"] = timedelta_to_string(blocks.remain)
-            out[f"{prefix}B1Start"] = blocks.block1_start.strftime("%H:%M")
-            out[f"{prefix}B1End"] = blocks.block1_end.strftime("%H:%M")
-            out[f"{prefix}B2Start"] = blocks.block2_start.strftime("%H:%M")
-            out[f"{prefix}B2End"] = blocks.block2_end.strftime("%H:%M")
+            out[f"WorkTarget_{suffix}"] = timedelta_to_string(blocks.total)
+            out[f"WorkOverflow_{suffix}"] = timedelta_to_string(blocks.remain)
+            out[f"MorningBlockStart_{suffix}"] = blocks.block1_start.strftime("%H:%M")
+            out[f"MorningBlockEnd_{suffix}"] = blocks.block1_end.strftime("%H:%M")
+            out[f"EveningBlockStart_{suffix}"] = blocks.block2_start.strftime("%H:%M")
+            out[f"EveningBlockEnd_{suffix}"] = blocks.block2_end.strftime("%H:%M")
 
         # ---- wake / bed --------------------------------------------
-        for prefix in ("50", "75"):
-            out[f"Wake{prefix}"] = raw["Fajr"]
-            block2_end = parse_time(out[f"W{prefix}B2End"])
+        for suffix in ("50", "75"):
+            out[f"WakeTime_{suffix}"] = raw["Fajr"]
+            block2_end = parse_time(out[f"EveningBlockEnd_{suffix}"])
             bed = max(block2_end, isha)
-            out[f"Bed{prefix}"] = bed.strftime("%H:%M")
+            out[f"BedTime_{suffix}"] = bed.strftime("%H:%M")
 
         if today == raw["Date"]:
-            out["Today"] = "X"
+            out["IsToday"] = "X"
 
-    # ---- awake / sleep (needs next row's Wake, done as a 2nd pass) --
+    # ---- awake / sleep (needs next row's wake time, 2nd pass) -------
     for i, out in enumerate(schedule):
         next_out = schedule[i + 1] if i + 1 < n else None
 
-        for prefix in ("50", "75"):
-            wake = parse_time(out[f"Wake{prefix}"])
-            bed = parse_time(out[f"Bed{prefix}"])
-            out[f"Awake{prefix}"] = duration_string(wake, bed)
+        for suffix in ("50", "75"):
+            wake = parse_time(out[f"WakeTime_{suffix}"])
+            bed = parse_time(out[f"BedTime_{suffix}"])
+            out[f"AwakeDuration_{suffix}"] = duration_string(wake, bed)
 
             if next_out is not None:
-                next_wake = parse_time(next_out[f"Wake{prefix}"])
-                out[f"Sleep{prefix}"] = duration_string(bed, next_wake)
+                next_wake = parse_time(next_out[f"WakeTime_{suffix}"])
+                out[f"SleepDuration_{suffix}"] = duration_string(bed, next_wake)
 
     # ---- sleep deficit (needs next row's Fajr) -----------------------
     for i, out in enumerate(schedule):
@@ -346,14 +394,14 @@ def build_schedule(raw_rows: list[dict]) -> list[dict]:
         if default_sleep.total_seconds() < 0:
             default_sleep += timedelta(days=1)
 
-        for prefix in ("50", "75"):
-            bed = parse_time(out[f"Bed{prefix}"])
+        for suffix in ("50", "75"):
+            bed = parse_time(out[f"BedTime_{suffix}"])
             actual_sleep = next_fajr - bed
             if actual_sleep.total_seconds() < 0:
                 actual_sleep += timedelta(days=1)
 
             deficit = max(timedelta(0), default_sleep - actual_sleep)
-            out[f"SleepDef{prefix}"] = timedelta_to_string(deficit)
+            out[f"SleepDeficit_{suffix}"] = timedelta_to_string(deficit)
 
     return schedule
 
