@@ -1190,10 +1190,6 @@ class MainWindow(Adw.ApplicationWindow):
         self.refresh_all()
 
     def _refresh_prayer_data(self, button: Gtk.Button, year_entry: Gtk.Entry | None = None) -> None:
-        script = APP_ROOT / "prayer_aio.py"
-        if not script.is_file():
-            self.refresh_status.set_text("The original prayer-data updater is not present in this installation.")
-            return
         try:
             year = int(year_entry.get_text().strip()) if year_entry else date.today().year
             if year < 1900 or year > 2200:
@@ -1201,8 +1197,15 @@ class MainWindow(Adw.ApplicationWindow):
         except ValueError:
             self.refresh_status.set_text("Enter a valid year between 1900 and 2200.")
             return
+        self._download_prayer_year(year, button, self.refresh_status)
+
+    def _download_prayer_year(self, year: int, button: Gtk.Button, status_widget: Gtk.Label) -> None:
+        script = APP_ROOT / "prayer_aio.py"
+        if not script.is_file():
+            status_widget.set_text("The prayer-data downloader is missing from this installation.")
+            return
         button.set_sensitive(False)
-        self.refresh_status.set_text(f"Downloading the complete {year} calendar. This requires internet access…")
+        status_widget.set_text(f"Downloading the complete {year} calendar. This requires an internet connection…")
 
         def worker():
             ensure_data_dir()
@@ -1222,14 +1225,15 @@ class MainWindow(Adw.ApplicationWindow):
             except (OSError, subprocess.TimeoutExpired) as exc:
                 ok = False
                 message = f"Download failed: {exc}"
-            GLib.idle_add(self._finish_refresh, button, ok, message)
+            GLib.idle_add(self._finish_prayer_download, button, status_widget, ok, message)
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _finish_refresh(self, button: Gtk.Button, ok: bool, message: str) -> bool:
+    def _finish_prayer_download(self, button: Gtk.Button, status_widget: Gtk.Label,
+                                ok: bool, message: str) -> bool:
         button.set_sensitive(True)
         self.refresh_all()
-        self.refresh_status.set_text(message)
+        status_widget.set_text(message)
         return GLib.SOURCE_REMOVE
 
     def _schedule_test_alarm(self, _button: Gtk.Button) -> None:
