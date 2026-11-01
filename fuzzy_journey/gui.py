@@ -14,8 +14,8 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from fuzzy_journey import database
-from fuzzy_journey.alarm_engine import next_occurrence
-from fuzzy_journey.notifications import play_alarm_sound
+from fuzzy_journey.alarm_engine import effective_routine_end, next_occurrence
+from fuzzy_journey.notifications import SOUND_PRESETS, play_alarm_sound
 from fuzzy_journey.paths import APP_DATA_DIR, APP_ROOT, ensure_data_dir, schedule_path
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
@@ -27,6 +27,13 @@ PRAYER_FIELDS = (
     ("Maghrib", "Maghrib"),
     ("Isha", "Isha"),
 )
+SOUND_KEYS = tuple(SOUND_PRESETS)
+SOUND_LABELS = tuple(SOUND_PRESETS.values())
+
+
+def sound_key_from_dropdown(dropdown: Gtk.DropDown) -> str:
+    index = int(dropdown.get_selected())
+    return SOUND_KEYS[index] if 0 <= index < len(SOUND_KEYS) else "classic"
 
 
 def label(text: str, css: str | None = None, *, xalign: float = 0.0, wrap: bool = False) -> Gtk.Label:
@@ -162,6 +169,12 @@ class AlarmForm(Gtk.Window):
         self.sound_check.set_active(bool(alarm["sound_enabled"]) if alarm else True)
         root.append(self.sound_check)
 
+        root.append(label("Alarm sound", "field-title"))
+        self.sound_dropdown = Gtk.DropDown.new_from_strings(list(SOUND_LABELS))
+        selected_sound = alarm.get("sound_key", "classic") if alarm else "classic"
+        self.sound_dropdown.set_selected(SOUND_KEYS.index(selected_sound) if selected_sound in SOUND_KEYS else 0)
+        root.append(self.sound_dropdown)
+
         self.enabled_check = Gtk.CheckButton(label="Keep this reminder enabled")
         self.enabled_check.set_active(bool(alarm["enabled"]) if alarm else True)
         root.append(self.enabled_check)
@@ -188,7 +201,8 @@ class AlarmForm(Gtk.Window):
         root.append(actions)
 
     def _test_sound(self, _button: Gtk.Button) -> None:
-        threading.Thread(target=play_alarm_sound, daemon=True).start()
+        selected_sound = sound_key_from_dropdown(self.sound_dropdown)
+        threading.Thread(target=play_alarm_sound, args=(selected_sound,), daemon=True).start()
 
     def _save(self, _button: Gtk.Button) -> None:
         title = self.title_entry.get_text().strip() or "Reminder"
@@ -220,6 +234,7 @@ class AlarmForm(Gtk.Window):
                 days_mask=days_mask,
                 one_shot_date=one_shot or None,
                 sound_enabled=self.sound_check.get_active(),
+                sound_key=sound_key_from_dropdown(self.sound_dropdown),
                 enabled=self.enabled_check.get_active(),
                 alarm_id=self.alarm["id"] if self.alarm else None,
             )
@@ -277,8 +292,8 @@ class MainWindow(Adw.ApplicationWindow):
             ("overview", "Overview", "view-grid-symbolic"),
             ("alarms", "Alarms", "alarm-symbolic"),
             ("calendar", "Calendar & time bank", "x-office-calendar-symbolic"),
-            ("schedule", "Daily schedule", "view-timeline-symbolic"),
-            ("prayers", "Prayer times", "view-calendar-symbolic"),
+            ("schedule", "Daily schedule", "view-list-symbolic"),
+            ("prayers", "Prayer times", "weather-clear-symbolic"),
             ("settings", "Settings", "preferences-system-symbolic"),
         )
         for key, title, icon_name in nav_items:
