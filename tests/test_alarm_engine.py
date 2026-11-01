@@ -111,6 +111,47 @@ class AlarmEngineTests(unittest.TestCase):
             set_prayer_alarm("Fajr", True, custom_sound_path=custom_path, path=db)
             self.assertEqual(list_prayer_alarms(db)["Fajr"]["custom_sound_path"], custom_path)
 
+    def test_girlfriend_call_0730_to_0800_extends_morning_work_without_losing_work_time(self):
+        from datetime import date
+        from fuzzy_journey.alarm_engine import effective_routine_end, routine_work_state
+
+        # Representative Shahrekord morning work interval from Fajr to 12:01.
+        work = {
+            "id": "morning", "category": "work", "start_time": "05:42",
+            "end_time": "12:01", "days_mask": 127, "enabled": True,
+        }
+        call = {
+            "id": 2, "category": "call", "title": "Call with girlfriend",
+            "start_time": "07:30", "end_time": "08:00",
+            "days_mask": 127, "enabled": True,
+        }
+        day = date(2026, 11, 2)
+        self.assertEqual(
+            effective_routine_end(work, [work, call], day),
+            datetime(2026, 11, 2, 12, 31),
+        )
+        paused = routine_work_state(work, [work, call], datetime(2026, 11, 2, 7, 45))
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["pause_until"], datetime(2026, 11, 2, 8, 0))
+        self.assertEqual(paused["remaining"].total_seconds(), 4 * 3600 + 31 * 60)
+
+    def test_activity_ending_exactly_at_work_start_does_not_extend_work(self):
+        from datetime import date
+        from fuzzy_journey.alarm_engine import effective_routine_end
+
+        work = {
+            "id": 1, "category": "work", "start_time": "08:00",
+            "end_time": "16:00", "days_mask": 127, "enabled": True,
+        }
+        call = {
+            "id": 2, "category": "call", "start_time": "07:30",
+            "end_time": "08:00", "days_mask": 127, "enabled": True,
+        }
+        self.assertEqual(
+            effective_routine_end(work, [work, call], date(2026, 11, 2)),
+            datetime(2026, 11, 2, 16, 0),
+        )
+
     def test_work_block_progress_shows_productive_time_remaining(self):
         from fuzzy_journey.alarm_engine import routine_work_state
 
