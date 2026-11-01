@@ -133,7 +133,7 @@ def fire_due_alarms(
         rows = connection.execute(
             """
             SELECT id, title, alarm_time, days_mask, one_shot_date,
-                   sound_enabled, sound_key, enabled, last_fired_date
+                   sound_enabled, sound_key, custom_sound_path, enabled, last_fired_date
             FROM alarms WHERE enabled=1
             """
         ).fetchall()
@@ -181,7 +181,7 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
     now = now or datetime.now().astimezone().replace(tzinfo=None)
     path = db_path or str(database.DATABASE_PATH)
     database.initialize(path)
-    candidates: list[tuple[str, str, datetime, bool, str, str]] = []
+    candidates: list[tuple[str, str, datetime, bool, str, str | None, str]] = []
 
     schedule_file = schedule_path(now.year)
     prayer_times: dict[str, str] = {}
@@ -207,7 +207,7 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
         candidates.append((
             f"prayer:{key}", f"{key} prayer", due,
             bool(settings.get("sound_enabled", 1)),
-            str(settings.get("sound_key") or "classic"), now.date().isoformat(),
+            str(settings.get("sound_key") or "classic"), settings.get("custom_sound_path"), now.date().isoformat(),
         ))
 
     blocks = database.list_routine_blocks(path)
@@ -222,11 +222,12 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
             start_due, base_end = _block_interval(block, start_day)
             sound_enabled = bool(block.get("sound_enabled", 1))
             sound_key = str(block.get("sound_key") or "classic")
+            custom_sound_path = block.get("custom_sound_path")
             event_day = start_day.isoformat()
             if offset == 0 and block.get("alarm_enabled"):
                 candidates.append((
                     f"routine:{block['id']}", block["title"], start_due,
-                    sound_enabled, sound_key, event_day,
+                    sound_enabled, sound_key, custom_sound_path, event_day,
                 ))
             if block.get("end_alarm_enabled"):
                 end_due = (
@@ -236,13 +237,13 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
                 )
                 candidates.append((
                     f"routine:{block['id']}:end", f"{block['title']} finished", end_due,
-                    sound_enabled, sound_key, event_day,
+                    sound_enabled, sound_key, custom_sound_path, event_day,
                 ))
 
     fired: list[dict[str, Any]] = []
     with database.connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
-        for event_key, title, due, sound_enabled, sound_key, event_day in candidates:
+        for event_key, title, due, sound_enabled, sound_key, custom_sound_path, event_day in candidates:
             elapsed = now - due
             if elapsed < timedelta(0) or elapsed > MISSED_ALARM_GRACE:
                 continue
@@ -265,5 +266,6 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
                 "alarm_time": due.strftime("%H:%M:%S" if due.second else "%H:%M"),
                 "sound_enabled": sound_enabled,
                 "sound_key": sound_key,
+                "custom_sound_path": custom_sound_path,
             })
     return fired
