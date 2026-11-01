@@ -76,6 +76,42 @@ class AlarmEngineTests(unittest.TestCase):
             set_day_type("2026-11-05", "off", path=db)
             self.assertEqual(day_balance(db)["balance"], -1.0)
 
+    def test_work_block_pauses_during_other_activities(self):
+        from datetime import date
+        from fuzzy_journey.alarm_engine import effective_routine_end
+
+        work = {"id": 1, "category": "work", "start_time": "08:00", "end_time": "16:00",
+                "days_mask": 127, "enabled": 1}
+        activity = {"id": 2, "category": "call", "start_time": "10:00", "end_time": "14:00",
+                    "days_mask": 127, "enabled": 1}
+        end = effective_routine_end(work, [work, activity], date(2026, 11, 2))
+        self.assertEqual(end, datetime(2026, 11, 2, 20, 0))
+
+    def test_work_block_end_alarm_uses_adjusted_finish(self):
+        from fuzzy_journey.database import initialize, save_routine_block
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "routines.sqlite3"
+            initialize(db)
+            save_routine_block(title="Work", category="work", start_time="08:00", end_time="16:00",
+                days_mask=127, end_alarm_enabled=True, path=db)
+            save_routine_block(title="Call", category="call", start_time="10:00", end_time="14:00",
+                days_mask=127, path=db)
+            events = fire_due_schedule_events(datetime(2026, 11, 2, 20, 0), db_path=str(db))
+            self.assertEqual([event["title"] for event in events], ["Work finished"])
+
+    def test_time_bank_start_date_resets_initial_balance(self):
+        from fuzzy_journey.database import initialize, set_day_type, set_time_bank_start_date, day_balance
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "days.sqlite3"
+            initialize(db)
+            set_day_type("2026-11-01", "off", path=db)
+            set_day_type("2026-11-02", "75", path=db)
+            set_day_type("2026-11-03", "75", path=db)
+            set_time_bank_start_date("2026-11-02", path=db)
+            stats = day_balance(db)
+            self.assertEqual(stats["balance"], 1.0)
+            self.assertEqual(stats["days_off"], 0)
+
     def test_routine_alarm_fires_once_per_day(self):
         from fuzzy_journey.database import initialize, save_routine_block
         with tempfile.TemporaryDirectory() as temp:
