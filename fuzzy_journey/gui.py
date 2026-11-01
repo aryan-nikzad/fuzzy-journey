@@ -1161,7 +1161,12 @@ class MainWindow(Adw.ApplicationWindow):
                 flags.append("start alarm")
             if block.get("end_alarm_enabled"):
                 flags.append("end alarm")
-            row.append(label((" · ".join(flags) if flags else "No alarms") + f" · Sound: {SOUND_PRESETS.get(block.get('sound_key', 'classic'), 'Classic')}", "field-hint"))
+            sound_name = (
+                Path(block["custom_sound_path"]).name
+                if block.get("custom_sound_path")
+                else SOUND_PRESETS.get(block.get("sound_key", "classic"), "Classic")
+            )
+            row.append(label((" · ".join(flags) if flags else "No alarms") + f" · {sound_name}", "field-hint"))
             self.routine_list.append(row)
 
     def _build_settings(self) -> Gtk.Widget:
@@ -1397,7 +1402,12 @@ class MainWindow(Adw.ApplicationWindow):
         text_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         text_stack.set_hexpand(True)
         text_stack.append(label(alarm["title"], "alarm-title"))
-        text_stack.append(label(f"{format_repeat(alarm)} · {SOUND_PRESETS.get(alarm.get('sound_key', 'classic'), 'Classic')}", "alarm-meta"))
+        sound_name = (
+            Path(alarm["custom_sound_path"]).name
+            if alarm.get("custom_sound_path")
+            else SOUND_PRESETS.get(alarm.get("sound_key", "classic"), "Classic")
+        )
+        text_stack.append(label(f"{format_repeat(alarm)} · {sound_name}", "alarm-meta"))
         outer.append(text_stack)
 
         if alarm.get("sound_enabled"):
