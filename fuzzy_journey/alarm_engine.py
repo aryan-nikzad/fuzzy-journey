@@ -225,7 +225,7 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
             event_day = start_day.isoformat()
             if offset == 0 and block.get("alarm_enabled"):
                 candidates.append((
-                    f"routine:{block['id']}:start", block["title"], start_due,
+                    f"routine:{block['id']}", block["title"], start_due,
                     sound_enabled, sound_key, event_day,
                 ))
             if block.get("end_alarm_enabled"):
