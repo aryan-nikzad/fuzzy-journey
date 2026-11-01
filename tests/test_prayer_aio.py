@@ -70,6 +70,8 @@ class EveningStartTests(unittest.TestCase):
         self.assertEqual(parse_clock_time("19:30"), time(19, 30))
         with self.assertRaises(Exception):
             parse_clock_time("25:00")
+        with self.assertRaises(Exception):
+            parse_clock_time("13:59")
 
 
 if __name__ == "__main__":
