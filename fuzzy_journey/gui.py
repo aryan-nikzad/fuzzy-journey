@@ -443,43 +443,109 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _install_css(self) -> None:
         css = b"""
-        window { background: #0b1120; color: #e5edf8; }
-        .sidebar { background: #101a2b; border: 1px solid #1d2a3e; border-radius: 20px; }
-        .brand-title { font-size: 17px; font-weight: 750; color: #f1f5f9; }
-        .brand-subtitle, .muted, .brand-subtitle { color: #91a2b8; font-size: 12px; }
-        .brand-icon { color: #8bd5f5; }
-        .nav-button { min-height: 44px; padding: 0 13px; border-radius: 11px; color: #a9b8ca; }
-        .nav-button:hover { background: #1b2a40; color: #f1f5f9; }
-        .nav-button.selected { background: #243b56; color: #d9f1ff; font-weight: 650; }
-        .page-title { font-size: 27px; font-weight: 760; color: #f8fafc; }
-        .clock-label { font-size: 22px; font-weight: 700; color: #a9ddf4; font-feature-settings: "tnum"; }
-        .main-content { padding: 4px 25px 28px 25px; }
-        .card { background: #131f31; border: 1px solid #25364d; border-radius: 17px; padding: 18px; }
-        .hero-card { background: linear-gradient(135deg, #172c43, #1b2940); border-color: #36516c; }
-        .eyebrow { color: #8fc8e8; font-size: 11px; font-weight: 750; letter-spacing: 1.2px; }
-        .hero-time { color: #f8fafc; font-size: 35px; font-weight: 800; font-feature-settings: "tnum"; }
-        .hero-title { color: #f8fafc; font-size: 18px; font-weight: 700; }
-        .section-title { font-size: 17px; font-weight: 720; color: #f1f5f9; }
-        .section-description { color: #91a2b8; font-size: 12px; }
-        .metric { font-size: 24px; font-weight: 750; color: #eff6ff; font-feature-settings: "tnum"; }
-        .metric-label { color: #91a2b8; font-size: 11px; }
-        .prayer-time { font-size: 19px; font-weight: 700; color: #eaf2fb; font-feature-settings: "tnum"; }
-        .prayer-name { font-size: 11px; color: #91a2b8; }
-        .form-title { font-size: 22px; font-weight: 750; color: #f8fafc; }
-        .field-title { font-size: 12px; font-weight: 700; color: #c4d1e0; }
-        .field-hint { color: #8396ad; font-size: 11px; }
-        .error-text { color: #ff9b9b; font-size: 12px; }
-        .time-label { font-size: 25px; font-weight: 800; color: #eff6ff; font-feature-settings: "tnum"; }
-        .alarm-title { font-size: 14px; font-weight: 700; color: #eaf2fb; }
-        .alarm-meta { font-size: 11px; color: #8fa2b9; }
-        .list-row { background: #131f31; border: 1px solid #25364d; border-radius: 13px; padding: 13px 15px; }
-        .version-label { color: #657991; font-size: 10px; letter-spacing: 0.8px; }
-        .online-pill { background: #173b37; color: #83e0bd; border-radius: 20px; padding: 6px 10px; font-size: 10px; font-weight: 750; }
-        .warning-pill { background: #46351d; color: #f5ca84; border-radius: 20px; padding: 6px 10px; font-size: 10px; font-weight: 750; }
+        window { background: #f4f6fa; color: #202938; }
+        window.dark-mode { background: #0d1420; color: #e8eef7; }
+        window.light-mode { background: #f4f6fa; color: #202938; }
+
+        .sidebar { border-radius: 18px; }
+        .dark-mode .sidebar { background: #141e2d; border: 1px solid #263449; }
+        .light-mode .sidebar { background: #ffffff; border: 1px solid #e4e8ef; }
+
+        .brand-title { font-size: 16px; font-weight: 750; }
+        .brand-subtitle, .muted { font-size: 12px; }
+        .dark-mode .brand-title { color: #f2f6fc; }
+        .light-mode .brand-title { color: #192536; }
+        .dark-mode .brand-subtitle, .dark-mode .muted { color: #9aaabd; }
+        .light-mode .brand-subtitle, .light-mode .muted { color: #657386; }
+        .brand-icon { color: #55b9e8; }
+
+        .nav-button { min-height: 42px; padding: 0 12px; border-radius: 10px; }
+        .dark-mode .nav-button { color: #aab8ca; }
+        .light-mode .nav-button { color: #536176; }
+        .dark-mode .nav-button:hover { background: #202e42; color: #f4f8fd; }
+        .light-mode .nav-button:hover { background: #edf3f8; color: #1e3448; }
+        .dark-mode .nav-button.selected { background: #203b54; color: #c7efff; font-weight: 650; }
+        .light-mode .nav-button.selected { background: #e4f2fa; color: #125477; font-weight: 650; }
+
+        .page-title { font-size: 25px; font-weight: 760; }
+        .dark-mode .page-title { color: #f5f8fc; }
+        .light-mode .page-title { color: #182536; }
+        .clock-label { font-size: 21px; font-weight: 700; font-feature-settings: "tnum"; }
+        .dark-mode .clock-label { color: #93d9f5; }
+        .light-mode .clock-label { color: #24769d; }
+
+        .main-content { padding: 4px 24px 26px 24px; }
+        .card { border-radius: 15px; padding: 17px; }
+        .dark-mode .card { background: #151f2e; border: 1px solid #2a394d; }
+        .light-mode .card { background: #ffffff; border: 1px solid #e2e7ee; }
+        .dark-mode .hero-card { background: #182a3c; border-color: #304b64; }
+        .light-mode .hero-card { background: #edf6fb; border-color: #d6e8f1; }
+
+        .eyebrow { font-size: 10px; font-weight: 750; letter-spacing: 1.1px; color: #3696c0; }
+        .dark-mode .eyebrow { color: #8bcce8; }
+        .hero-time { font-size: 34px; font-weight: 800; font-feature-settings: "tnum"; }
+        .dark-mode .hero-time { color: #f7fbff; }
+        .light-mode .hero-time { color: #18374c; }
+        .hero-title { font-size: 17px; font-weight: 700; }
+        .dark-mode .hero-title { color: #f5f8fc; }
+        .light-mode .hero-title { color: #1c3548; }
+        .section-title { font-size: 16px; font-weight: 720; }
+        .dark-mode .section-title { color: #eaf0f8; }
+        .light-mode .section-title { color: #263447; }
+        .section-description { font-size: 12px; }
+        .dark-mode .section-description { color: #9aaabd; }
+        .light-mode .section-description { color: #6d7b8d; }
+
+        .metric { font-size: 23px; font-weight: 750; font-feature-settings: "tnum"; }
+        .dark-mode .metric { color: #edf5ff; }
+        .light-mode .metric { color: #24364a; }
+        .metric-label { font-size: 11px; color: #7c8b9c; }
+        .prayer-time { font-size: 18px; font-weight: 700; font-feature-settings: "tnum"; }
+        .dark-mode .prayer-time { color: #eaf2fb; }
+        .light-mode .prayer-time { color: #2b4258; }
+        .prayer-name { font-size: 11px; }
+        .dark-mode .prayer-name { color: #93a5ba; }
+        .light-mode .prayer-name { color: #748398; }
+
+        .form-title { font-size: 21px; font-weight: 750; }
+        .dark-mode .form-title { color: #f4f8fc; }
+        .light-mode .form-title { color: #203247; }
+        .field-title { font-size: 12px; font-weight: 700; }
+        .dark-mode .field-title { color: #cbd6e3; }
+        .light-mode .field-title { color: #44566c; }
+        .field-hint { font-size: 11px; }
+        .dark-mode .field-hint { color: #91a2b7; }
+        .light-mode .field-hint { color: #718095; }
+        .error-text { color: #d94c4c; font-size: 12px; }
+        .time-label { font-size: 23px; font-weight: 800; font-feature-settings: "tnum"; }
+        .dark-mode .time-label { color: #eef5fd; }
+        .light-mode .time-label { color: #263b51; }
+        .alarm-title { font-size: 13px; font-weight: 700; }
+        .dark-mode .alarm-title { color: #e8eff8; }
+        .light-mode .alarm-title { color: #2b3b50; }
+        .alarm-meta { font-size: 11px; }
+        .dark-mode .alarm-meta { color: #96a8bd; }
+        .light-mode .alarm-meta { color: #748296; }
+        .list-row { border-radius: 12px; padding: 12px 14px; }
+        .dark-mode .list-row { background: #151f2e; border: 1px solid #2a394d; }
+        .light-mode .list-row { background: #ffffff; border: 1px solid #e2e7ee; }
+        .version-label { font-size: 10px; letter-spacing: 0.7px; color: #8492a4; }
+
+        .online-pill { background: #e2f5ec; color: #18734b; border-radius: 18px; padding: 5px 9px; font-size: 10px; font-weight: 750; }
+        .warning-pill { background: #fff1d8; color: #8a5b12; border-radius: 18px; padding: 5px 9px; font-size: 10px; font-weight: 750; }
         .small-button { padding: 5px 10px; }
-        .dim-line { color: #8495a9; font-size: 12px; }
-        .accent { color: #9edcf8; }
-        entry { min-height: 38px; }
+        .dim-line { font-size: 12px; }
+        .dark-mode .dim-line { color: #91a2b7; }
+        .light-mode .dim-line { color: #758398; }
+        .accent { color: #2489b7; }
+        entry { min-height: 36px; border-radius: 9px; }
+        .dark-mode entry { background: #111b29; color: #e8eef7; border-color: #34465c; }
+        .light-mode entry { background: #fbfcfe; color: #26364a; border-color: #d8e0e9; }
+        .dark-mode dropdown { color: #e8eef7; }
+        .light-mode dropdown { color: #26364a; }
+        .prayer-date-row { border-bottom: 1px solid transparent; }
+        .dark-mode .prayer-date-row { border-bottom-color: #28384c; }
+        .light-mode .prayer-date-row { border-bottom-color: #e8edf2; }
         """
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
@@ -488,6 +554,16 @@ class MainWindow(Adw.ApplicationWindow):
             Gtk.StyleContext.add_provider_for_display(
                 display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
             )
+        self._apply_theme(database.get_app_setting("theme", "dark") == "dark", persist=False)
+
+    def _apply_theme(self, dark: bool, *, persist: bool = True) -> None:
+        self.remove_css_class("dark-mode")
+        self.remove_css_class("light-mode")
+        self.add_css_class("dark-mode" if dark else "light-mode")
+        scheme = Adw.ColorScheme.FORCE_DARK if dark else Adw.ColorScheme.FORCE_LIGHT
+        Adw.StyleManager.get_default().set_color_scheme(scheme)
+        if persist:
+            database.set_app_setting("theme", "dark" if dark else "light")
 
     def _navigate(self, _button: Gtk.Button | None, page: str) -> None:
         self.stack.set_visible_child_name(page)
