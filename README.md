@@ -1,148 +1,160 @@
 # Fuzzy Journey
 
-A minimal, single-purpose tool that works out **when you should wake up, work, and sleep** — anchored to Islamic prayer times.
+**A local-first daily planner and alarm app for Linux.**
 
-Prayer times are derived from the sun's position, so they're astronomically accurate and fall at consistent points in your day. That makes them excellent anchors for a schedule that respects your body's natural rhythm.
+Fuzzy Journey builds a wake / work / rest rhythm around Islamic prayer times. The original Python scheduling engine remains available, while the desktop app adds a polished GTK 4 + libadwaita interface and a persistent Linux alarm service.
 
----
+The important design decision: **alarms do not rely on the GUI being open or the internet being available.** Reminders are stored in a local SQLite database and delivered by a user-level systemd service.
 
-## The idea
+## What it does
 
-The time from **Fajr (dawn)** to **Isha (night)** is your main waking window. From that we derive a wake / work / sleep plan:
+- A native-feeling GTK 4 / libadwaita desktop interface.
+- A daily overview with the next reminder, prayer times, and the 50% / 75% work and sleep plans.
+- Multiple reminders at different times, with a custom title and sound toggle.
+- Recurring reminders on selected weekdays, or a one-time reminder on a chosen date.
+- Critical desktop notifications and an audible alarm tone.
+- Reminders continue after the application window is closed.
+- Local SQLite storage; no account, cloud service, push provider, or network request is involved in alarm delivery.
+- A bundled Shahrekord 2026 schedule, so the first launch can show prayer times while offline.
+- Optional prayer-data refresh from AlAdhan when an internet connection is available.
+- A reminders history, alarm service status, and a settings page.
+- Native desktop header-bar controls for moving, minimizing, maximizing and closing the window.
 
-- **Wake up** = Fajr.
-- **Work** is split into two blocks — a morning block (Fajr → **14:00**) and an evening block (**18:00** → onward).
-- The fixed **14:00 → 18:00** gap (4 hours) is yours for everything else: a 2-hour gym session (14:00–16:00), a 2-hour call with your girlfriend (16:00–18:00), whatever.
-- **Bed time** = the later of the evening block's end or Isha.
-- **Sleep** = bed time → next day's Fajr.
+## Linux installation
 
-You can choose how hard to push: a **50%** plan (a gentler, sustainable day) or a **75%** plan (a longer, more demanding one). The tool tells you exactly what hours each plan implies and how much sleep you'd get — and flags a **sleep deficit** if pushing the plan eats into your natural recovery window.
+The supported desktop target is Ubuntu / GNOME with systemd, GTK 4 and libadwaita.
 
----
-
-## Features
-
-- Downloads a **full year** of prayer times from the [AlAdhan API](https://aladhan.com/prayer-times-api).
-- Derives day/night lengths and both the **50%** and **75%** work/sleep plans.
-- **Flex-time** support: add extra `--flex-time HH:MM` of work on top of a plan, re-allocated into the work blocks (morning first, evening if it's full); **`--reset-flex`** clears it back to `00:00`. Shows a labeled **noon block** and warns whenever flex time is applied.
-- **`--schedule-only`** to hide the prayer / day-night sections and show just the work/sleep plans.
-- **All-in-one** script: fetch → generate → display.
-- **Preserves existing data** by default — it won't overwrite CSVs that are already there.
-- **`--override`** to refresh, with an automatic **timestamped backup** first.
-- **Show today**, **show tomorrow**, or **preview any date**.
-- **Filter** to just the 50% or 75% plan.
-- Network retries, atomic file writes, and header validation so nothing gets silently corrupted.
-
----
-
-## Install
-
-Requires Python 3.10+ and one dependency:
+Install the desktop bindings and notification helper once:
 
 ```bash
-pip install requests
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libnotify-bin
 ```
 
-That's it — everything else is in the standard library.
+For audio playback, use a working PipeWire or PulseAudio session. The service checks for `paplay`, `pw-play`, or `aplay` and uses the first available player.
 
----
-
-## Usage
+From the repository directory:
 
 ```bash
-# First run: download a year + generate + show today
-python3 prayer_aio.py
+chmod +x install.sh
+./install.sh
+```
 
-# Just show today from existing data (never downloads)
+The installer copies the application to `~/.local/share/fuzzy-journey/app`, creates an application-menu entry, and enables `fuzzy-journey.service` as a user service. It does not need internet access after the required desktop packages are present.
+
+Launch **Fuzzy Journey** from the applications menu, or run:
+
+```bash
+~/.local/bin/fuzzy-journey
+```
+
+To remove the application while keeping your saved alarms and data:
+
+```bash
+./uninstall.sh
+```
+
+## How alarms work
+
+1. Create a reminder and choose its time.
+2. Select the weekdays on which it should repeat, or enter a one-time date in `YYYY-MM-DD` format.
+3. Enable or disable its sound.
+4. Save it. The reminder is persisted in SQLite.
+5. The systemd user service checks the local database every five seconds and issues a desktop notification plus the alarm sound when an alarm is due.
+
+You can close the GUI after creating reminders. The service continues in the background and is configured to start at user login.
+
+The scheduler allows a **five-minute catch-up window**. For example, if the service starts again shortly after an alarm time, it can still deliver that alarm once. A recurring reminder is recorded as fired for that local date, so it cannot ring repeatedly during the same minute or service restart. One-time reminders are automatically disabled after delivery.
+
+Useful service commands:
+
+```bash
+systemctl --user status fuzzy-journey.service
+systemctl --user restart fuzzy-journey.service
+journalctl --user -u fuzzy-journey.service -f
+```
+
+## Offline and power-state behaviour
+
+Alarm delivery is completely local. It does not contact AlAdhan, GitHub, a push-notification provider, or any remote server.
+
+There are unavoidable operating-system limits:
+
+- The computer must be powered on. A normal desktop app cannot make sound while the computer is shut down.
+- The user session must be logged in for desktop notifications and audio to be available.
+- A suspended computer cannot play an alarm at the scheduled instant unless the hardware / OS wakes it. On resume, the service can catch up if the alarm is no more than five minutes late.
+- If a reminder is more than five minutes late when the service returns, it is treated as missed rather than playing an outdated alarm hours later.
+
+For dependable use, keep the user session logged in and disable automatic suspend during periods when alarms must be heard. The background service is independent of the app window, not of the computer's power state.
+
+## Data and privacy
+
+Everything lives on the device:
+
+- Database: `~/.local/share/fuzzy-journey/fuzzy-journey.sqlite3`
+- Generated alarm tone: `~/.local/share/fuzzy-journey/alarm.wav`
+- Downloaded prayer schedules and backups: `~/.local/share/fuzzy-journey/`
+
+No telemetry or cloud sync is implemented. The alarm daemon only reads the local database and calls the desktop notification / audio tools.
+
+## Prayer-time data
+
+The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. The prayer page displays every remaining date in the available year; the calendar itself can navigate across months and years. Prayer alarms are resolved from the local date row, so they follow changing prayer times rather than using a fixed clock time.
+
+Prayer-data refresh is optional and requires a working connection. The app reuses the original `prayer_aio.py` updater and its AlAdhan calculation settings. Existing files are backed up by the original updater before replacement. If a later year is not bundled, add or refresh that year's CSV when connected; custom alarms do not depend on prayer-time data.
+
+Default location: Shahrekord, Iran (`32.3261, 50.8572`), AlAdhan method 7.
+
+## Original command-line planner
+
+The original CLI remains available:
+
+```bash
 python3 prayer_aio.py --today
-
-# Show tomorrow
 python3 prayer_aio.py --tomorrow
-
-# Only the 50% plan, for tomorrow  (the combo you actually want)
 python3 prayer_aio.py --50 --tomorrow
-
-# Only the 75% plan, for today
 python3 prayer_aio.py --75
-
-# Preview a specific date
 python3 prayer_aio.py --date 15-03-2026
-
-# Add 30 min of flex time on top of the work plan (schedule only)
 python3 prayer_aio.py --flex-time 00:30
-
-# Clear any flex time again — schedule rebuilt from raw, no flex time
 python3 prayer_aio.py --reset-flex
-
-# Show only the 50% / 75% plans (hide prayer + day/night sections)
-python3 prayer_aio.py --schedule-only
-
-# Force a refresh (existing files are backed up first)
-python3 prayer_aio.py --override
 ```
 
-### Options
+The optional refresh action and CLI downloader require the `requests` Python package. On Ubuntu, install it with `sudo apt install python3-requests`. Reading and displaying existing CSV schedules and delivering alarms do not need it or make a network request.
 
-| Flag | Description |
-|------|-------------|
-| `--today` | Show only today; never download or change files. |
-| `--tomorrow` | Show tomorrow's schedule instead of today's. |
-| `--50` | Show only the 50% work/sleep plan. |
-| `--75` | Show only the 75% work/sleep plan. |
-| `--schedule-only` | Hide the prayer / sun times and day / night-length sections; show only the 50% / 75% plans. Pure view unless combined with `--override` / `--flex-time`. |
-| `--date DD-MM-YYYY` | Preview a specific date. |
-| `--no-show` | Generate but don't print the schedule. |
-| `--override` | Regenerate even if files exist (old files backed up first). |
-| `--file PATH` | Show an existing schedule CSV by path. |
-| `--flex-time HH:MM` | Extra flexible work time added to the work target and re-allocated into the work blocks (see below). Schedule CSV only; raw data is never changed. Pass `00:00` to remove. |
-| `--reset-flex` | Regenerate the schedule with flex time set to `00:00` (looks exactly like the base plan). |
-| `--city NAME` | City label used in the filenames. |
-| `--year YYYY` | Year to fetch (defaults to the current year). |
-| `--lat L --lon L` | Coordinates (defaults to Shahrekord, Iran). |
-| `--method N` | AlAdhan calculation method (default: 7). |
+## Tests
 
-Every flag also has a short alias — `-t`, `-T`, `-o`, `-n`, `-d`, `-f`, `-s`, `-S`, `-p`, `-w`, `-r`, `-c`, `-y`, `-l`, `-L`, `-m` — so `-w 00:30 -S` adds flex time and shows just the plans.
+Run the alarm scheduling tests with the standard library:
 
----
+```bash
+PYTHONPATH=. python3 -m unittest discover -s tests -v
+```
 
-## Output files
+The tests cover weekday recurrence, one-time dates, the five-minute catch-up rule, one-time delivery persistence, routine alarm deduplication, and time-bank accounting.
 
-Running a download produces two CSVs in the current folder:
+## Day types and time bank
 
-- `<city>_prayer_times_<year>_raw.csv` — the prayer times exactly as returned by the API.
-- `<city>_prayer_times_<year>_schedule.csv` — the raw times plus every derived column (day/night lengths, both work plans, wake/bed/sleep durations, a `FlexTime` column, and a `IsToday` flag).
+- **50% day:** neutral; it does not change the balance.
+- **75% day:** earns **+0.5 day**.
+- **Day off:** spends **1 day**.
+- The balance is allowed to become negative. For example, taking a day off first creates -1; two 75% days bring it back to zero.
+- Day types are stored by date in SQLite. The calendar is a planner, so entries can be assigned to future dates too. The balance includes all dates you have explicitly classified.
 
-### Flex time
+## Dynamic routines
 
-`--flex-time HH:MM` is extra work time you consciously add on top of a plan — think of it as reclaiming spare moments rather than "wasting" anything. It is **added to the work target** and then re-allocated into the work blocks:
+Create recurring blocks for work, sleep, wake-up, girlfriend calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state and optional start alarm. Edit or delete blocks as your routine changes. The routine alarm is independent of the GUI and is checked by the same offline daemon.
 
-- It goes into the **morning block** (Fajr → 14:00) whenever that block still has room.
-- If the morning block is already full, it spills into the **evening block** (18:00 → onward).
-- It is added to **both** the 50% and 75% plans.
+## Project layout
 
-The fixed afternoon break (14:00 → 18:00) is shown explicitly in each plan as the **`Noon block (free)`** line — your wellbeing / other-tasks window. Whenever flex time is applied to a day, the viewer prints a `FLEX TIME APPLIED` banner so you always know it's there; the amount is also stored per day in the `FlexTime` column of the schedule CSV.
+| Path | Purpose |
+| --- | --- |
+| `fuzzy_journey/gui.py` | GTK desktop application |
+| `fuzzy_journey/alarm_daemon.py` | Background alarm service |
+| `fuzzy_journey/alarm_engine.py` | Due-time and recurrence logic |
+| `fuzzy_journey/database.py` | SQLite persistence |
+| `fuzzy_journey/notifications.py` | Desktop notification and local sound |
+| `prayer_aio.py` | Original all-in-one prayer/work/sleep planner |
+| `install.sh` / `uninstall.sh` | Linux user installation |
+| `tests/` | Offline unit tests |
 
-The schedule CSV is **always regenerated from the raw CSV** — it is never edited in place — so `--flex-time` only touches the schedule file, never the raw file, and re-running never double-counts it. Use **`--reset-flex`** (or `--flex-time 00:00`) to clear it; the schedule then looks exactly like the plan computed without any flex time.
+## License
 
-> If only the schedule CSV is missing but the raw CSV is present, the schedule is recalculated **without any download**. Only a missing/corrupt raw CSV triggers a fresh download.
-
-> CSVs are generated data and are git-ignored — regenerate them anytime with `python3 prayer_aio.py`.
-
----
-
-## Project files
-
-| File | Purpose |
-|------|---------|
-| `prayer_aio.py` | All-in-one: fetch, generate, and display. Use this one. |
-| `prayer_schedule.py` | Standalone fetch + generate (kept for reference). |
-| `today_schedule.py` | Standalone "show today" viewer (kept for reference). |
-| `AGENTS.md` | Notes for AI coding agents working on this repo. |
-
----
-
-## Notes
-
-- Data source: [AlAdhan Prayer Times API](https://aladhan.com/prayer-times-api) (free, no key required).
-- Times are shown in local time as returned by the API; durations auto-roll over midnight.
-- The `14:00` / `18:00` midday boundaries are hardcoded as the fixed break window — change `limit_14` / `block2_start` in `calculate_work_blocks()` if you want different break hours.
+MIT. See [LICENSE](LICENSE).

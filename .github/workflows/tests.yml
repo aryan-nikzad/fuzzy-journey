@@ -1,0 +1,23 @@
+name: Tests
+
+on:
+  push:
+    branches: ["main", "feature/**"]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Compile Python modules
+        run: python -m py_compile prayer_aio.py fuzzy_journey/*.py
+      - name: Run offline alarm tests
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests -v
+      - name: Validate shell scripts
+        run: bash -n install.sh uninstall.sh run.sh
