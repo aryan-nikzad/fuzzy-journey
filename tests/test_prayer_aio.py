@@ -55,6 +55,12 @@ class EveningStartTests(unittest.TestCase):
         self.assertEqual(rows[0]["EveningBlockEnd_50"], "19:30")
         self.assertEqual(rows[0]["WorkOverflow_50"], "00:00")
 
+    def test_empty_evening_block_does_not_delay_bedtime(self):
+        rows = build_schedule(self._raw_rows(), evening_start="19:30")
+        self.assertEqual(rows[0]["EveningBlockStart_50"], "19:30")
+        self.assertEqual(rows[0]["EveningBlockEnd_50"], "19:30")
+        self.assertEqual(rows[0]["BedTime_50"], "18:20")
+
     def test_evening_start_defaults_to_1800(self):
         rows = build_schedule(self._raw_rows())
         self.assertEqual(rows[0]["EveningBlockStart_75"], "18:00")
