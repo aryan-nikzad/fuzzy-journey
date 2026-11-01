@@ -1606,56 +1606,404 @@ class MainWindow(Adw.ApplicationWindow):
         self.alarm_service_badge.remove_css_class("warning-pill" if service_running else "online-pill")
         self.alarm_service_badge.add_css_class("online-pill" if service_running else "warning-pill")
 
+    def _dashboard_alarm_items(
+        self,
+        today: date,
+        now: datetime,
+        prayer_row: dict | None,
+        routine_blocks: list[dict],
+    ) -> list[dict]:
+        items: list[dict] = []
+
+        for alarm in database.list_alarms():
+            if not alarm.get("enabled"):
+                continue
+            one_shot = alarm.get("one_shot_date")
+            if one_shot:
+                if one_shot != today.isoformat():
+                    continue
+            elif not (int(alarm.get("days_mask") or 0) & (1 << today.weekday())):
+                continue
+            try:
+                due = datetime.combine(today, datetime.strptime(alarm["alarm_time"][:5], "%H:%M").time())
+            except (ValueError, TypeError):
+                continue
+            items.append({
+                "due": due,
+                "title": alarm["title"],
+                "source": "Reminder",
+                "sound": alarm_sound_summary(
+                    bool(alarm.get("sound_enabled")),
+                    alarm.get("sound_key", "classic"),
+                    alarm.get("custom_sound_path"),
+                ),
+            })
+
+        if prayer_row:
+            prayer_settings = database.list_prayer_alarms()
+            for prayer_key, settings in prayer_settings.items():
+                if not settings.get("enabled"):
+                    continue
+                raw_time = prayer_row.get(prayer_key)
+                try:
+                    due = datetime.combine(today, datetime.strptime(str(raw_time)[:5], "%H:%M").time())
+                    due += timedelta(minutes=int(settings.get("offset_minutes") or 0))
+                except (ValueError, TypeError):
+                    continue
+                items.append({
+                    "due": due,
+                    "title": prayer_key,
+                    "source": "Prayer",
+                    "sound": alarm_sound_summary(
+                        bool(settings.get("sound_enabled", 1)),
+                        settings.get("sound_key", "classic"),
+                        settings.get("custom_sound_path"),
+                    ),
+                })
+
+        for block in routine_blocks:
+            if not block.get("enabled") or not routine_occurs_on(block, today):
+                continue
+            sound = alarm_sound_summary(
+                bool(block.get("sound_enabled", 1)),
+                block.get("sound_key", "classic"),
+                block.get("custom_sound_path"),
+            )
+            if block.get("alarm_enabled"):
+                try:
+                    due = datetime.combine(today, datetime.strptime(block["start_time"], "%H:%M").time())
+                except (ValueError, TypeError):
+                    due = None
+                if due:
+                    items.append({
+                        "due": due,
+                        "title": f"{block['title']} · start",
+                        "source": "Schedule",
+                        "sound": sound,
+                    })
+            if block.get("end_alarm_enabled"):
+                if str(block.get("category", "")).lower() == "work":
+                    due = effective_routine_end(block, routine_blocks, today)
+                else:
+                    interval = schedule_range(today, block.get("start_time"), block.get("end_time"))
+                    due = interval[1] if interval else None
+                if due:
+                    items.append({
+                        "due": due,
+                        "title": f"{block['title']} · end",
+                        "source": "Schedule",
+                        "sound": sound,
+                    })
+
+        return sorted(items, key=lambda item: item["due"])
+
+    def _append_dashboard_row(
+        self,
+        container: Gtk.Box,
+        time_value: str,
+        title_value: str,
+        detail_value: str,
+        status_value: str = "",
+        *,
+        css: str = "alarm-meta",
+    ) -> None:
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        row.set_margin_top(2)
+        row.set_margin_bottom(2)
+        time_label = label(time_value, "time-label")
+        time_label.set_width_chars(6)
+        row.append(time_label)
+        text_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        text_stack.set_hexpand(True)
+        text_stack.append(label(title_value, "alarm-title"))
+        text_stack.append(label(detail_value, css, wrap=True))
+        row.append(text_stack)
+        if status_value:
+            row.append(label(status_value, "field-hint"))
+        container.append(row)
+
     def refresh_overview(self) -> None:
-        alarms = database.list_alarms()
         now = datetime.now()
-        candidates = [(next_occurrence(alarm, now), alarm) for alarm in alarms if alarm.get("enabled")]
-        candidates = [(when, alarm) for when, alarm in candidates if when is not None]
-        if candidates:
-            when, alarm = min(candidates, key=lambda item: item[0])
-            self.next_alarm_time.set_text(when.strftime("%H:%M"))
-            day_label = "Today" if when.date() == now.date() else when.strftime("%A, %d %b")
-            self.next_alarm_title.set_text(f"{alarm['title']}  ·  {day_label}  ·  in {countdown_text(when - now)}")
+        today_date = now.date()
+        today_iso = today_date.isoformat()
+        today_row, _rows, schedule_file = load_schedule(today_date)
+        entries = database.get_day_entries(today_iso, today_iso)
+        day_type = entries[0]["day_type"] if entries else "50"
+        plan_index = {"50": 0, "75": 1, "off": 2}.get(day_type, 0)
+        if self.today_plan_dropdown.get_selected() != plan_index:
+            self._updating_today_plan = True
+            self.today_plan_dropdown.set_selected(plan_index)
+            self._updating_today_plan = False
+        if day_type == "off":
+            self.today_plan_note.set_text("Day off · work targets are paused. Wake and sleep times remain visible.")
+        elif day_type == "75":
+            self.today_plan_note.set_text("Intensive day · using the 75% plan for today's work and rest times.")
         else:
-            self.next_alarm_time.set_text("All clear")
-            self.next_alarm_title.set_text("No enabled reminders. Add one to keep your routine on track.")
+            self.today_plan_note.set_text("Standard day · unclassified days use the 50% plan automatically.")
 
-        today, _rows, path = load_schedule()
-        day_entry = database.get_day_entries(now.date().isoformat(), now.date().isoformat())
-        selected_plan = day_entry[0]["day_type"] if day_entry else "50"
-        if hasattr(self, "today_plan_badge"):
-            self.today_plan_badge.set_text("TODAY'S PLAN · " + ("75%" if selected_plan == "75" else "DAY OFF" if selected_plan == "off" else "50%"))
+        routine_blocks = [
+            block for block in database.list_routine_blocks()
+            if block.get("enabled") and routine_occurs_on(block, today_date)
+        ]
+        all_routine_blocks = database.list_routine_blocks()
+        plan_key = "75" if day_type == "75" else "50"
+
+        # Build only real work intervals: a 18:00–18:00 row means no evening block.
+        work_entries: list[dict] = []
+        if today_row and day_type != "off":
+            for block_name, start_field, end_field in (
+                ("Morning work", f"MorningBlockStart_{plan_key}", f"MorningBlockEnd_{plan_key}"),
+                ("Evening work", f"EveningBlockStart_{plan_key}", f"EveningBlockEnd_{plan_key}"),
+            ):
+                start_value = str(today_row.get(start_field) or "").strip()
+                end_value = str(today_row.get(end_field) or "").strip()
+                interval = schedule_range(today_date, start_value, end_value)
+                if not interval:
+                    continue
+                synthetic = {
+                    "id": f"schedule-{block_name}",
+                    "title": block_name,
+                    "category": "work",
+                    "start_time": start_value,
+                    "end_time": end_value,
+                    "days_mask": 127,
+                    "enabled": True,
+                }
+                state = routine_work_state(synthetic, all_routine_blocks, now)
+                work_entries.append({
+                    "title": block_name,
+                    "start": state["start"],
+                    "end": state["end"],
+                    "remaining": state["remaining"],
+                    "status": state["status"],
+                    "pause_title": state["pause_title"],
+                    "pause_until": state["pause_until"],
+                    "planned": interval[1] - interval[0],
+                })
+
+        for block in routine_blocks:
+            if str(block.get("category", "")).lower() != "work":
+                continue
+            interval = schedule_range(today_date, block.get("start_time"), block.get("end_time"))
+            if not interval:
+                continue
+            state = routine_work_state(block, all_routine_blocks, now)
+            work_entries.append({
+                "title": block["title"],
+                "start": state["start"],
+                "end": state["end"],
+                "remaining": state["remaining"],
+                "status": state["status"],
+                "pause_title": state["pause_title"],
+                "pause_until": state["pause_until"],
+                "planned": interval[1] - interval[0],
+                "block": block,
+            })
+        work_entries.sort(key=lambda item: item["start"])
+
+        clear_box = self.work_blocks_list.get_first_child()
+        while clear_box:
+            following = clear_box.get_next_sibling()
+            self.work_blocks_list.remove(clear_box)
+            clear_box = following
+
+        if day_type == "off":
+            self.work_status_badge.set_text("DAY OFF")
+            self.work_status_remaining.set_text("Rest day")
+            self.work_status_title.set_text("No work blocks scheduled")
+            self.work_status_detail.set_text("Your work plan is paused for today.")
+            self.work_progress_bar.set_fraction(0.0)
+        elif not work_entries:
+            self.work_status_badge.set_text("NO BLOCKS")
+            self.work_status_remaining.set_text("—")
+            self.work_status_title.set_text("No work blocks in this plan")
+            self.work_status_detail.set_text("Check the local prayer schedule or edit your daily schedule.")
+            self.work_progress_bar.set_fraction(0.0)
+        else:
+            active = next((item for item in work_entries if item["status"] in {"in_progress", "paused"}), None)
+            upcoming = next((item for item in work_entries if item["status"] == "upcoming"), None)
+            focus = active or upcoming or work_entries[-1]
+            remaining = focus["remaining"]
+            if focus["status"] == "paused":
+                self.work_status_badge.set_text("PAUSED")
+                self.work_status_remaining.set_text(f"{countdown_text(remaining)} left")
+                self.work_status_title.set_text(f"{focus['title']} · paused")
+                pause_until = focus["pause_until"].strftime("%H:%M") if focus["pause_until"] else "later"
+                self.work_status_detail.set_text(
+                    f"{focus['pause_title']} until {pause_until} · adjusted finish {focus['end'].strftime('%H:%M')}"
+                )
+            elif focus["status"] == "in_progress":
+                self.work_status_badge.set_text("IN PROGRESS")
+                self.work_status_remaining.set_text(f"{countdown_text(remaining)} left")
+                self.work_status_title.set_text(focus["title"])
+                self.work_status_detail.set_text(
+                    f"{focus['start'].strftime('%H:%M')}–{focus['end'].strftime('%H:%M')} · productive time remaining"
+                )
+            elif focus["status"] == "upcoming":
+                self.work_status_badge.set_text("UP NEXT")
+                self.work_status_remaining.set_text(f"{countdown_text(focus['start'] - now)}")
+                self.work_status_title.set_text(f"{focus['title']} starts in")
+                self.work_status_detail.set_text(
+                    f"{focus['start'].strftime('%H:%M')}–{focus['end'].strftime('%H:%M')} · "
+                    f"{countdown_text(focus['planned'])} planned"
+                )
+            else:
+                self.work_status_badge.set_text("COMPLETE")
+                self.work_status_remaining.set_text("Complete")
+                self.work_status_title.set_text("Today's work is complete")
+                self.work_status_detail.set_text("All scheduled work blocks have finished.")
+            if focus["status"] in {"in_progress", "paused"}:
+                done = max(0.0, focus["planned"].total_seconds() - remaining.total_seconds())
+                fraction = done / focus["planned"].total_seconds() if focus["planned"].total_seconds() else 0.0
+                self.work_progress_bar.set_fraction(min(1.0, max(0.0, fraction)))
+            elif focus["status"] == "completed":
+                self.work_progress_bar.set_fraction(1.0)
+            else:
+                self.work_progress_bar.set_fraction(0.0)
+
+            for item in work_entries:
+                state = {
+                    "upcoming": "Starts in " + countdown_text(item["start"] - now),
+                    "in_progress": countdown_text(item["remaining"]) + " left",
+                    "paused": "Paused",
+                    "completed": "Complete",
+                }.get(item["status"], "")
+                detail = f"{item['start'].strftime('%H:%M')}–{item['end'].strftime('%H:%M')}"
+                if item.get("block"):
+                    block = item["block"]
+                    alarm_flags = []
+                    if block.get("alarm_enabled"):
+                        alarm_flags.append("start alarm")
+                    if block.get("end_alarm_enabled"):
+                        alarm_flags.append("end alarm")
+                    sound_name = alarm_sound_summary(
+                        bool(block.get("sound_enabled")),
+                        block.get("sound_key", "classic"),
+                        block.get("custom_sound_path"),
+                    )
+                    detail += " · " + (" / ".join(alarm_flags) if alarm_flags else "no alarms")
+                    detail += " · " + sound_name
+                self._append_dashboard_row(
+                    self.work_blocks_list, item["start"].strftime("%H:%M"),
+                    item["title"], detail, state,
+                )
+
+        # Resolve the day boundaries from user wake/sleep routines, falling back to the
+        # selected prayer-derived plan. A zero-length interval is never displayed.
+        wake_block = next((b for b in routine_blocks if b.get("category") == "wake"), None)
+        sleep_block = next((b for b in routine_blocks if b.get("category") == "sleep"), None)
+        wake_time = wake_block.get("start_time") if wake_block else (
+            today_row.get(f"WakeTime_{plan_key}") if today_row else None
+        )
+        bed_time = sleep_block.get("start_time") if sleep_block else (
+            today_row.get(f"BedTime_{plan_key}") if today_row else None
+        )
+        sleep_duration = today_row.get(f"SleepDuration_{plan_key}") if today_row else None
+        self.day_start_value.set_text(clock_text(wake_time))
+        self.day_end_value.set_text(clock_text(bed_time))
+        self.day_sleep_value.set_text(duration_text(sleep_duration or "—"))
+        self.day_start_detail.set_text(
+            "Wake-up" + (" · start alarm" if wake_block and wake_block.get("alarm_enabled") else "")
+        )
+        self.day_end_detail.set_text(
+            "Bedtime" + (" · start alarm" if sleep_block and sleep_block.get("alarm_enabled") else "")
+        )
+        self.day_sleep_detail.set_text("Planned sleep")
+
+        clear_box = self.day_timeline_list.get_first_child()
+        while clear_box:
+            following = clear_box.get_next_sibling()
+            self.day_timeline_list.remove(clear_box)
+            clear_box = following
+        timeline: list[tuple[datetime, str, str, str]] = []
+        if wake_time:
+            interval = schedule_range(today_date, wake_time, "23:59")
+            if interval:
+                timeline.append((interval[0], clock_text(wake_time), "Start of day", "Wake-up"))
+        for item in work_entries:
+            timeline.append((
+                item["start"], item["start"].strftime("%H:%M"),
+                item["title"], f"Finish {item['end'].strftime('%H:%M')} · {countdown_text(item['remaining'])} {item['status'].replace('_', ' ')}",
+            ))
+        for block in routine_blocks:
+            category = str(block.get("category") or "personal").lower()
+            if category in {"work", "wake", "sleep"}:
+                continue
+            interval = schedule_range(today_date, block.get("start_time"), block.get("end_time"))
+            if not interval:
+                continue
+            alarm_flags = []
+            if block.get("alarm_enabled"):
+                alarm_flags.append("start alarm")
+            if block.get("end_alarm_enabled"):
+                alarm_flags.append("end alarm")
+            sound_name = alarm_sound_summary(
+                bool(block.get("sound_enabled")),
+                block.get("sound_key", "classic"),
+                block.get("custom_sound_path"),
+            )
+            meta = category.title()
+            if alarm_flags:
+                meta += " · " + " / ".join(alarm_flags) + " · " + sound_name
+            timeline.append((
+                interval[0], interval[0].strftime("%H:%M"), block["title"],
+                f"{interval[0].strftime('%H:%M')}–{interval[1].strftime('%H:%M')} · {meta}",
+            ))
+        if bed_time:
+            interval = schedule_range(today_date, bed_time, "23:59")
+            if interval:
+                timeline.append((interval[0], clock_text(bed_time), "End of day", "Bedtime"))
+        for _sort, time_value, title_value, detail_value in sorted(timeline, key=lambda entry: entry[0]):
+            self._append_dashboard_row(self.day_timeline_list, time_value, title_value, detail_value)
+
+        # Show all configured alarms for today, including their individual sound settings.
+        alarm_items = self._dashboard_alarm_items(today_date, now, today_row, all_routine_blocks)
+        future_items = [item for item in alarm_items if item["due"] >= now]
+        if future_items:
+            upcoming_alarm = future_items[0]
+            self.next_alarm_time.set_text(upcoming_alarm["due"].strftime("%H:%M"))
+            self.next_alarm_title.set_text(
+                f"{upcoming_alarm['title']} · in {countdown_text(upcoming_alarm['due'] - now)}"
+            )
+        else:
+            self.next_alarm_time.set_text("—")
+            self.next_alarm_title.set_text("No upcoming alarms today")
+        clear_box = self.today_alarms_list.get_first_child()
+        while clear_box:
+            following = clear_box.get_next_sibling()
+            self.today_alarms_list.remove(clear_box)
+            clear_box = following
+        if not alarm_items:
+            self.today_alarms_list.append(label("No alarms scheduled for today.", "muted"))
+        else:
+            for item in alarm_items:
+                status = "Earlier" if item["due"] < now else "In " + countdown_text(item["due"] - now)
+                self._append_dashboard_row(
+                    self.today_alarms_list,
+                    item["due"].strftime("%H:%M"),
+                    item["title"],
+                    f"{item['source']} · {item['sound']}",
+                    status,
+                )
+
         clear_list(self.prayer_grid)
-        if today:
+        if today_row:
             for index, (name, field) in enumerate(PRAYER_FIELDS):
-                tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-                tile.append(label(name.upper(), "prayer-name"))
-                tile.append(label(today.get(field, "—"), "prayer-time"))
+                tile = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+                tile.append(label(name, "prayer-name"))
+                tile.append(label(today_row.get(field, "—"), "prayer-time"))
                 self.prayer_grid.attach(tile, index % 3, index // 3, 1, 1)
-
-            self.plan_50_value.set_text(duration_text(today.get("WorkTarget_50", "—")))
-            self.plan_75_value.set_text(duration_text(today.get("WorkTarget_75", "—")))
-            self.plan_50_detail.set_text(
-                f"Morning  {today.get('MorningBlockStart_50')}–{today.get('MorningBlockEnd_50')}\n"
-                f"Evening  {today.get('EveningBlockStart_50')}–{today.get('EveningBlockEnd_50')}\n"
-                f"Sleep    {duration_text(today.get('SleepDuration_50', '—'))}"
-            )
-            self.plan_75_detail.set_text(
-                f"Morning  {today.get('MorningBlockStart_75')}–{today.get('MorningBlockEnd_75')}\n"
-                f"Evening  {today.get('EveningBlockStart_75')}–{today.get('EveningBlockEnd_75')}\n"
-                f"Sleep    {duration_text(today.get('SleepDuration_75', '—'))}"
-            )
-            start_field = "MorningBlockStart_75" if selected_plan == "75" else "MorningBlockStart_50"
-            start_value = today.get(start_field, "—")
-            self.overview_note.set_text(f"Work starts at {start_value} · selected day: {selected_plan if selected_plan == 'off' else selected_plan + '%'} · {path.name}")
         else:
-            self.prayer_grid.attach(label("No prayer schedule found for today. The app itself still works offline; add this year's CSV or refresh it when connected.", "muted", wrap=True), 0, 0, 3, 1)
-            self.plan_50_value.set_text("—")
-            self.plan_75_value.set_text("—")
-            self.plan_50_detail.set_text("No local data for today.")
-            self.plan_75_detail.set_text("No local data for today.")
-            self.overview_note.set_text("Prayer data can be refreshed from Settings when a connection is available.")
-        self.data_badge.set_text("LOCAL DATA" if path else "DATA NEEDED")
+            self.prayer_grid.attach(
+                label("No prayer timetable for today. Download this year from Prayer Times.", "muted", wrap=True),
+                0, 0, 3, 1,
+            )
+        self.data_badge.set_text("LOCAL DATA" if schedule_file else "DATA NEEDED")
+        self.overview_note.set_text(
+            f"Your plan, work progress and configured alarm times are calculated from local data. "
+            f"{'Prayer data is available offline.' if schedule_file else 'Download this year from Prayer Times.'}"
+        )
+
 
     def refresh_prayer_page(self) -> None:
         clear_list(self.prayer_table)
