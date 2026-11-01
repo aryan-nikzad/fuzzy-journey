@@ -1668,8 +1668,12 @@ class MainWindow(Adw.ApplicationWindow):
                     ),
                 })
 
+        day_entries = database.get_day_entries(today.isoformat(), today.isoformat())
+        is_day_off = bool(day_entries and day_entries[0]["day_type"] == "off")
         for block in routine_blocks:
             if not block.get("enabled") or not routine_occurs_on(block, today):
+                continue
+            if is_day_off and str(block.get("category", "")).lower() == "work":
                 continue
             sound = alarm_sound_summary(
                 bool(block.get("sound_enabled", 1)),
@@ -1910,6 +1914,12 @@ class MainWindow(Adw.ApplicationWindow):
             today_row.get(f"BedTime_{plan_key}") if today_row else None
         )
         sleep_duration = today_row.get(f"SleepDuration_{plan_key}") if today_row else None
+        if sleep_block:
+            sleep_interval = schedule_range(today_date, sleep_block.get("start_time"), sleep_block.get("end_time"))
+            if sleep_interval:
+                total_minutes = int((sleep_interval[1] - sleep_interval[0]).total_seconds() // 60)
+                sleep_hours, sleep_minutes = divmod(total_minutes, 60)
+                sleep_duration = f"{sleep_hours:02d}:{sleep_minutes:02d}"
         self.day_start_value.set_text(clock_text(wake_time))
         self.day_end_value.set_text(clock_text(bed_time))
         self.day_sleep_value.set_text(duration_text(sleep_duration or "—"))
@@ -2019,7 +2029,7 @@ class MainWindow(Adw.ApplicationWindow):
             )
         bank = database.day_balance()
         balance_value = bank["balance"]
-        balance_text = f"{balance_value:+g} day bank" if balance_value else "0 day bank"
+        balance_text = f"Day-off balance · {balance_value:+g}d" if balance_value else "Day-off balance · 0d"
         self.today_balance_label.set_text(balance_text)
         service_running = self._service_active()
         self.dashboard_service_badge.set_text("ALARMS RUNNING" if service_running else "ALARMS STOPPED")
