@@ -578,11 +578,13 @@ def print_plan(row: dict, suffix: str) -> None:
         "  Morning block",
         f"{row[f'MorningBlockStart_{pct}']} - {row[f'MorningBlockEnd_{pct}']}",
     )
-    line("  Noon block (free)", "14:00 - 18:00", "wellbeing / other tasks")
-    line(
-        "  Evening block",
-        f"{row[f'EveningBlockStart_{pct}']} - {row[f'EveningBlockEnd_{pct}']}",
-    )
+    evening_start = row[f"EveningBlockStart_{pct}"]
+    evening_end = row[f"EveningBlockEnd_{pct}"]
+    line("  Noon block (free)", f"14:00 - {evening_start}", "wellbeing / other tasks")
+    if evening_start != evening_end:
+        line("  Evening block", f"{evening_start} - {evening_end}")
+    else:
+        line("  Evening block", "None", "no overflow work")
     line("  Total work target", row[f"WorkTarget_{pct}"])
     flex = row["FlexTime"]
     if flex != "00:00":
@@ -894,6 +896,12 @@ def main() -> None:
     if args.override and (raw_exists or sched_exists):
         print("⚠ Override requested — backing up existing files first.")
         backup_existing_files()
+    elif args.evening_start is not None and sched_exists:
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup_dir = BACKUP_DIR / timestamp
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(SCHEDULE_FILE, backup_dir / SCHEDULE_FILE.name)
+        log.info("Backed up previous derived schedule -> %s", backup_dir)
 
     # ---- explain what we are about to do ----
     if need_download and not args.override and (raw_exists or sched_exists):
