@@ -234,9 +234,9 @@ class AlarmForm(Gtk.Window):
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app)
-        headerbar = Gtk.HeaderBar()
-        headerbar.set_show_title_buttons(True)
-        self.set_titlebar(headerbar)
+        headerbar = Adw.HeaderBar()
+        headerbar.set_show_start_title_buttons(False)
+        headerbar.set_show_end_title_buttons(True)
         self.set_title("Fuzzy Journey")
         self.set_default_size(1160, 780)
         self.set_size_request(760, 560)
@@ -246,7 +246,10 @@ class MainWindow(Adw.ApplicationWindow):
         ensure_data_dir()
 
         shell = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-        self.set_content(shell)
+        toolbar_view = Adw.ToolbarView()
+        toolbar_view.add_top_bar(headerbar)
+        toolbar_view.set_content(shell)
+        self.set_content(toolbar_view)
 
         sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
         sidebar.add_css_class("sidebar")
