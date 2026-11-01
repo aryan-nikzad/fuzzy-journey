@@ -59,6 +59,9 @@ USAGE
     # Remove any flex time again (schedule rebuilt from raw, no flex time)
     python3 prayer_aio.py --reset-flex
 
+    # Start the evening work block at 19:30 (rebuilds from local raw data)
+    python3 prayer_aio.py --year 2026 --evening-start 19:30 --no-show
+
     # Different location / year
     python3 prayer_aio.py --city tehran --year 2027 --lat 35.6892 --lon 51.3890
 
@@ -733,8 +736,8 @@ def parse_args() -> argparse.Namespace:
                              "schedule from raw (no flex time).")
 
     parser.add_argument("--evening-start", type=parse_clock_time, default=None,
-                        help="Set the evening work-block start (HH:MM). When supplied, "
-                             "the schedule is rebuilt from existing raw data without downloading.")
+                        help="Set the evening work-block start (HH:MM; effective default 18:00). "
+                             "When supplied, the schedule is rebuilt from existing raw data without downloading.")
 
     parser.add_argument("--city", "-c", default=CITY_SLUG, help="City name (used for the filename).")
     parser.add_argument("--year", "-y", type=int, default=YEAR, help="Year to fetch.")
