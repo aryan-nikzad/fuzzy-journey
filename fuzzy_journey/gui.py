@@ -888,6 +888,29 @@ class MainWindow(Adw.ApplicationWindow):
         old_sound = block.get("sound_key", "classic") if block else "classic"
         sound_dropdown.set_selected(SOUND_KEYS.index(old_sound) if old_sound in SOUND_KEYS else 0)
         box.append(sound_dropdown)
+        custom_sound_path = block.get("custom_sound_path") if block else None
+        custom_sound_status = label(
+            Path(custom_sound_path).name if custom_sound_path else "Using the built-in alarm tone.",
+            "field-hint", wrap=True,
+        )
+        def custom_selected(path, error):
+            nonlocal custom_sound_path
+            if error:
+                custom_sound_status.set_text(error)
+                return
+            custom_sound_path = path
+            custom_sound_status.set_text(f"Custom sound: {Path(path).name}" if path else "Using the built-in alarm tone.")
+        custom_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        choose_custom = Gtk.Button(label="Choose audio file")
+        choose_custom.add_css_class("flat")
+        choose_custom.connect("clicked", lambda _b: choose_audio_file(dialog, custom_selected))
+        custom_actions.append(choose_custom)
+        clear_custom = Gtk.Button(label="Use built-in")
+        clear_custom.add_css_class("flat")
+        clear_custom.connect("clicked", lambda _b: custom_selected(None, None))
+        custom_actions.append(clear_custom)
+        box.append(custom_actions)
+        box.append(custom_sound_status)
         enabled = Gtk.CheckButton(label="Block enabled")
         enabled.set_active(bool(block["enabled"]) if block else True); box.append(enabled)
         status = label("", "error-text", wrap=True); box.append(status)
@@ -910,6 +933,7 @@ class MainWindow(Adw.ApplicationWindow):
                     end_alarm_enabled=end_alarm.get_active(),
                     sound_enabled=sound.get_active(),
                     sound_key=sound_key_from_dropdown(sound_dropdown),
+                    custom_sound_path=custom_sound_path,
                     enabled=enabled.get_active(),
                     block_id=block["id"] if block else None,
                 )
