@@ -144,7 +144,7 @@ def fire_due_alarms(
                 continue
 
             one_shot = bool(alarm.get("one_shot_date"))
-            connection.execute(
+            claimed = connection.execute(
                 """
                 UPDATE alarms
                 SET last_fired_date=?,
@@ -161,7 +161,7 @@ def fire_due_alarms(
                     now.date().isoformat(),
                 ),
             )
-            if connection.total_changes == 0:
+            if claimed.rowcount != 1:
                 continue
 
             connection.execute(
