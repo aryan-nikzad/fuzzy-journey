@@ -1011,7 +1011,7 @@ class MainWindow(Adw.ApplicationWindow):
             ]
             try:
                 result = subprocess.run(
-                    command, cwd=APP_DATA_DIR, capture_output=True, text=True, timeout=360, check=False
+                    command, cwd=APP_DATA_DIR, capture_output=True, text=True, timeout=1800, check=False
                 )
                 ok = result.returncode == 0
                 message = f"{year} prayer data downloaded and saved for offline use." if ok else (
