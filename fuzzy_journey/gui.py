@@ -627,8 +627,41 @@ class MainWindow(Adw.ApplicationWindow):
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         page.add_css_class("main-content")
 
+        self.prayer_selected_year = date.today().year
+        self.prayer_full_year = False
+        year_card = make_card()
+        year_controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        previous_year = Gtk.Button.new_from_icon_name("go-previous-symbolic")
+        previous_year.add_css_class("flat")
+        previous_year.set_tooltip_text("Previous year")
+        previous_year.connect("clicked", lambda _b: self._shift_prayer_year(-1))
+        year_controls.append(previous_year)
+        self.prayer_year_label = label(str(self.prayer_selected_year), "section-title")
+        self.prayer_year_label.set_hexpand(True)
+        self.prayer_year_label.set_xalign(0.5)
+        year_controls.append(self.prayer_year_label)
+        next_year = Gtk.Button.new_from_icon_name("go-next-symbolic")
+        next_year.add_css_class("flat")
+        next_year.set_tooltip_text("Next year")
+        next_year.connect("clicked", lambda _b: self._shift_prayer_year(1))
+        year_controls.append(next_year)
+        year_card.append(year_controls)
+        year_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.prayer_scope_button = Gtk.Button(label="Show full year")
+        self.prayer_scope_button.add_css_class("flat")
+        self.prayer_scope_button.connect("clicked", self._toggle_prayer_year_scope)
+        year_actions.append(self.prayer_scope_button)
+        self.prayer_download_button = Gtk.Button(label="Download this year")
+        self.prayer_download_button.add_css_class("suggested-action")
+        self.prayer_download_button.connect("clicked", self._download_selected_prayer_year)
+        year_actions.append(self.prayer_download_button)
+        year_card.append(year_actions)
+        self.prayer_year_status = label("", "field-hint", wrap=True)
+        year_card.append(self.prayer_year_status)
+        page.append(year_card)
+
         card = make_card()
-        card.append(label("Prayer times on this device", "section-title"))
+        card.append(label("Prayer alarms", "section-title"))
         card.append(label("Prayer data is stored locally after download. The selected year's CSV is used without an internet connection.", "muted", wrap=True))
         card.append(label("Enable each prayer independently and choose its sound.", "field-hint", wrap=True))
         self.prayer_alarm_checks = {}
@@ -680,6 +713,18 @@ class MainWindow(Adw.ApplicationWindow):
         self.prayer_page_note = label("", "muted", wrap=True)
         page.append(self.prayer_page_note)
         return self._scroll_page(page)
+
+    def _shift_prayer_year(self, amount: int) -> None:
+        self.prayer_selected_year += amount
+        self.prayer_full_year = self.prayer_selected_year != date.today().year
+        self.refresh_prayer_page()
+
+    def _toggle_prayer_year_scope(self, _button: Gtk.Button) -> None:
+        self.prayer_full_year = not self.prayer_full_year
+        self.refresh_prayer_page()
+
+    def _download_selected_prayer_year(self, button: Gtk.Button) -> None:
+        self._download_prayer_year(self.prayer_selected_year, button, self.prayer_year_status)
 
     def _update_prayer_alarm(self, prayer_key: str, *, enabled: bool | None = None,
                              sound_key: str | None = None,
@@ -1368,37 +1413,51 @@ class MainWindow(Adw.ApplicationWindow):
 
     def refresh_prayer_page(self) -> None:
         clear_list(self.prayer_table)
+        year = self.prayer_selected_year
         today = date.today()
-        _today, rows, _path = load_schedule(today)
-        if not rows:
-            self.prayer_page_note.set_text("No local data is available for this year. Your custom reminders continue to work normally.")
+        self.prayer_year_label.set_text(str(year))
+        self.prayer_scope_button.set_sensitive(True)
+        self.prayer_scope_button.set_label("Show upcoming dates" if self.prayer_full_year else "Show full year")
+
+        path = schedule_path(year)
+        if path is None:
+            self.prayer_year_status.set_text(
+                f"The {year} prayer calendar is not downloaded on this device. "
+                "Download the complete year now; it will remain available offline."
+            )
+            self.prayer_download_button.set_visible(True)
+            self.prayer_scope_button.set_sensitive(False)
             return
 
-        start_index = None
-        for index, row in enumerate(rows):
-            try:
-                row_date = datetime.strptime(row["Date"], "%d-%m-%Y").date()
-            except (KeyError, ValueError):
-                continue
-            if row_date >= today:
-                start_index = index
-                break
-        if start_index is None:
-            self.prayer_page_note.set_text("No upcoming dates are present in this local file. Refresh the prayer data when connected.")
-            return
-        for row_data in rows[start_index:]:
+        self.prayer_download_button.set_visible(False)
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+
+        dated_rows = []
+        for row_data in rows:
             try:
                 row_date = datetime.strptime(row_data["Date"], "%d-%m-%Y").date()
             except (KeyError, ValueError):
                 continue
+            if self.prayer_full_year or row_date >= today:
+                dated_rows.append((row_date, row_data))
+
+        if not dated_rows:
+            self.prayer_year_status.set_text(
+                f"No upcoming dates remain in {year}. Use “Show full year” to view its complete timetable."
+            )
+            return
+
+        for row_date, row_data in dated_rows:
             line = Gtk.ListBoxRow()
+            line.add_css_class("prayer-date-row")
             line_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            line_box.set_margin_top(9)
-            line_box.set_margin_bottom(9)
+            line_box.set_margin_top(8)
+            line_box.set_margin_bottom(8)
             line_box.set_margin_start(12)
             line_box.set_margin_end(12)
             date_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            date_box.set_size_request(130, -1)
+            date_box.set_size_request(112, -1)
             date_box.append(label(row_date.strftime("%a, %d %b"), "alarm-title"))
             date_box.append(label("Today" if row_date == today else row_date.strftime("%Y"), "alarm-meta"))
             line_box.append(date_box)
@@ -1407,11 +1466,15 @@ class MainWindow(Adw.ApplicationWindow):
                 cell = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
                 cell.set_hexpand(True)
                 cell.append(label(name, "prayer-name"))
-                cell.append(label(row_data.get(field, "—"), "alarm-title"))
+                cell.append(label(row_data.get(field, "—"), "prayer-time"))
                 line_box.append(cell)
             line.set_child(line_box)
             self.prayer_table.append(line)
-        self.prayer_page_note.set_text(f"Showing every remaining date in {today.year} from the local schedule ({len(rows) - start_index} days). Use the full-year calendar for day-type planning.")
+
+        count_label = "full year" if self.prayer_full_year else "remaining dates"
+        self.prayer_year_status.set_text(
+            f"{year} · {len(dated_rows)} days · {count_label} · saved locally"
+        )
 
     def refresh_settings(self) -> None:
         active = self._service_active()
