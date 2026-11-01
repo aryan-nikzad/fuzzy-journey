@@ -606,7 +606,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _navigate(self, _button: Gtk.Button | None, page: str) -> None:
         self.stack.set_visible_child_name(page)
         titles = {
-            "overview": ("Overview", "Your day, at a glance"),
+            "overview": ("Today", date.today().strftime("%A · %d %B %Y")),
             "alarms": ("Alarms", "Independent reminders for anything that matters"),
             "calendar": ("Calendar & time bank", "Plan the whole year and track earned or borrowed days off"),
             "schedule": ("Daily schedule", "Build and change your recurring daily rhythm"),
@@ -635,14 +635,14 @@ class MainWindow(Adw.ApplicationWindow):
         # One small control keeps today's plan directly editable from the home screen.
         plan_card = make_card()
         plan_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        plan_header.append(label("TODAY'S PLAN", "eyebrow"))
+        plan_header.append(label("PLAN", "eyebrow"))
         plan_spacer = Gtk.Box()
         plan_spacer.set_hexpand(True)
         plan_header.append(plan_spacer)
         self.today_plan_dropdown = Gtk.DropDown.new_from_strings(
             ["50% · Standard", "75% · Intensive", "Day off"]
         )
-        self.today_plan_dropdown.set_size_request(190, -1)
+        self.today_plan_dropdown.set_size_request(160, -1)
         self._updating_today_plan = True
         today_entries = database.get_day_entries(date.today().isoformat(), date.today().isoformat())
         current_kind = today_entries[0]["day_type"] if today_entries else "50"
@@ -650,7 +650,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._updating_today_plan = False
         self.today_plan_dropdown.connect("notify::selected", self._today_plan_changed)
         plan_header.append(self.today_plan_dropdown)
-        self.today_balance_label = label("0 days available", "field-hint")
+        self.today_balance_label = label("Bank 0d", "field-hint")
         plan_header.append(self.today_balance_label)
         edit_day = Gtk.Button(label="Calendar")
         edit_day.add_css_class("flat")
@@ -694,19 +694,13 @@ class MainWindow(Adw.ApplicationWindow):
         day_card = make_card()
         day_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         day_header.append(label("YOUR DAY", "section-title"))
-        day_header_spacer = Gtk.Box()
-        day_header_spacer.set_hexpand(True)
         day_header.append(label("Wake · Work · Rest · Sleep", "field-hint"))
         day_card.append(day_header)
         boundaries = Gtk.Grid()
         boundaries.set_column_homogeneous(True)
         boundaries.set_column_spacing(14)
         boundaries.set_row_spacing(4)
-        for column, (caption, value_widget) in enumerate((
-            ("START OF DAY", None),
-            ("END OF DAY", None),
-            ("SLEEP", None),
-        )):
+        for column, caption in enumerate(("START OF DAY", "END OF DAY", "SLEEP")):
             boundaries.attach(label(caption, "eyebrow"), column, 0, 1, 1)
         self.day_start_value = label("—", "metric")
         self.day_end_value = label("—", "metric")
@@ -761,8 +755,6 @@ class MainWindow(Adw.ApplicationWindow):
         prayer_card = make_card()
         prayer_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         prayer_header.append(label("PRAYER TIMES", "section-title"))
-        prayer_header_spacer = Gtk.Box()
-        prayer_header_spacer.set_hexpand(True)
         prayer_header.append(label("Shahrekord · local data", "field-hint"))
         prayer_card.append(prayer_header)
         self.prayer_grid = Gtk.Grid()
@@ -1925,7 +1917,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.day_sleep_value.set_text(duration_text(sleep_duration or "—"))
         wake_alarm_enabled = bool(
             (wake_block and wake_block.get("alarm_enabled")) or
-            (sleep_block and not wake_block and sleep_block.get("end_alarm_enabled"))
+            (sleep_block and sleep_block.get("end_alarm_enabled"))
         )
         self.day_start_detail.set_text("Wake-up" + (" · alarm on" if wake_alarm_enabled else ""))
         self.day_end_detail.set_text(
@@ -2029,8 +2021,9 @@ class MainWindow(Adw.ApplicationWindow):
             )
         bank = database.day_balance()
         balance_value = bank["balance"]
-        balance_text = f"Day-off balance · {balance_value:+g}d" if balance_value else "Day-off balance · 0d"
+        balance_text = f"Bank {balance_value:+g}d" if balance_value else "Bank 0d"
         self.today_balance_label.set_text(balance_text)
+        self.today_balance_label.set_tooltip_text("Time-off balance: earned with 75% days and spent on days off.")
         service_running = self._service_active()
         self.dashboard_service_badge.set_text("ALARMS RUNNING" if service_running else "ALARMS STOPPED")
         self.dashboard_service_badge.remove_css_class("warning-pill" if service_running else "online-pill")
@@ -2124,6 +2117,8 @@ class MainWindow(Adw.ApplicationWindow):
     def _tick_clock(self) -> bool:
         now = datetime.now()
         self.clock_label.set_text(now.strftime("%H:%M"))
+        if self.stack.get_visible_child_name() == "overview":
+            self.page_subtitle.set_text(now.strftime("%A · %d %B %Y"))
         if now.strftime("%H:%M") == "00:00":
             self.refresh_all()
         else:
