@@ -165,3 +165,12 @@ Create recurring blocks for work, sleep, wake-up, calls, gym, reading or any oth
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+
+## Evening work-block start and pause handling
+
+The evening work-block start defaults to **18:00**, but it is configurable in **Settings → Work schedule**. Choose a time from 14:00 onward and apply it to locally available schedule years. The app rebuilds the derived schedule from the existing raw prayer-time CSV files; it does not need to download prayer data again. Previous derived schedules are backed up. Future year downloads inherit the saved start time. The first work block still has its existing 14:00 limit, so the free interval between the morning block and evening work changes with this setting.
+
+An evening block with no overflow has equal start and end times and is treated as **no block**. It is not rendered as a zero-length shift and does not delay bedtime.
+
+Other enabled activities pause the productive work clock only for the minutes that overlap work. For example, if the generated morning work block is 05:42–12:01 and a recurring call is scheduled from 07:30–08:00, the call pauses work for 30 minutes and the block finishes at 12:31. The dashboard shows the call as the active pause and continues the remaining-work countdown after 08:00. If a call ends exactly when work starts (for example, work starts at 08:00), it does not extend the work block because there is no overlap. The original productive work duration is preserved.
