@@ -647,6 +647,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._updating_today_plan = False
         self.today_plan_dropdown.connect("notify::selected", self._today_plan_changed)
         plan_header.append(self.today_plan_dropdown)
+        self.today_balance_label = label("0 days available", "field-hint")
+        plan_header.append(self.today_balance_label)
         edit_day = Gtk.Button(label="Calendar")
         edit_day.add_css_class("flat")
         edit_day.connect("clicked", lambda _b: self._navigate(None, "calendar"))
@@ -728,6 +730,8 @@ class MainWindow(Adw.ApplicationWindow):
         alarms_header_spacer = Gtk.Box()
         alarms_header_spacer.set_hexpand(True)
         alarms_header.append(label("Times and sound settings", "field-hint"))
+        self.dashboard_service_badge = label("CHECKING", "warning-pill")
+        alarms_header.append(self.dashboard_service_badge)
         alarms_card.append(alarms_header)
         next_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.next_alarm_time = label("—", "time-label")
@@ -1892,7 +1896,9 @@ class MainWindow(Adw.ApplicationWindow):
         # selected prayer-derived plan. A zero-length interval is never displayed.
         wake_block = next((b for b in routine_blocks if b.get("category") == "wake"), None)
         sleep_block = next((b for b in routine_blocks if b.get("category") == "sleep"), None)
-        wake_time = wake_block.get("start_time") if wake_block else (
+        wake_time = (
+            wake_block.get("start_time") if wake_block else
+            sleep_block.get("end_time") if sleep_block and sleep_block.get("end_time") else
             today_row.get(f"WakeTime_{plan_key}") if today_row else None
         )
         bed_time = sleep_block.get("start_time") if sleep_block else (
@@ -1902,11 +1908,13 @@ class MainWindow(Adw.ApplicationWindow):
         self.day_start_value.set_text(clock_text(wake_time))
         self.day_end_value.set_text(clock_text(bed_time))
         self.day_sleep_value.set_text(duration_text(sleep_duration or "—"))
-        self.day_start_detail.set_text(
-            "Wake-up" + (" · start alarm" if wake_block and wake_block.get("alarm_enabled") else "")
+        wake_alarm_enabled = bool(
+            (wake_block and wake_block.get("alarm_enabled")) or
+            (sleep_block and not wake_block and sleep_block.get("end_alarm_enabled"))
         )
+        self.day_start_detail.set_text("Wake-up" + (" · alarm on" if wake_alarm_enabled else ""))
         self.day_end_detail.set_text(
-            "Bedtime" + (" · start alarm" if sleep_block and sleep_block.get("alarm_enabled") else "")
+            "Bedtime" + (" · alarm on" if sleep_block and sleep_block.get("alarm_enabled") else "")
         )
         self.day_sleep_detail.set_text("Planned sleep")
 
@@ -1917,9 +1925,11 @@ class MainWindow(Adw.ApplicationWindow):
             clear_box = following
         timeline: list[tuple[datetime, str, str, str]] = []
         if wake_time:
-            interval = schedule_range(today_date, wake_time, "23:59")
-            if interval:
-                timeline.append((interval[0], clock_text(wake_time), "Start of day", "Wake-up"))
+            try:
+                wake_moment = datetime.combine(today_date, datetime.strptime(wake_time, "%H:%M").time())
+                timeline.append((wake_moment, clock_text(wake_time), "Start of day", "Wake-up"))
+            except ValueError:
+                pass
         for item in work_entries:
             timeline.append((
                 item["start"], item["start"].strftime("%H:%M"),
@@ -1950,11 +1960,15 @@ class MainWindow(Adw.ApplicationWindow):
                 f"{interval[0].strftime('%H:%M')}–{interval[1].strftime('%H:%M')} · {meta}",
             ))
         if bed_time:
-            interval = schedule_range(today_date, bed_time, "23:59")
-            if interval:
-                timeline.append((interval[0], clock_text(bed_time), "End of day", "Bedtime"))
+            try:
+                bed_moment = datetime.combine(today_date, datetime.strptime(bed_time, "%H:%M").time())
+                timeline.append((bed_moment, clock_text(bed_time), "End of day", "Bedtime"))
+            except ValueError:
+                pass
         for _sort, time_value, title_value, detail_value in sorted(timeline, key=lambda entry: entry[0]):
             self._append_dashboard_row(self.day_timeline_list, time_value, title_value, detail_value)
+        if not timeline:
+            self.day_timeline_list.append(label("No day boundaries or activities configured yet.", "muted"))
 
         # Show all configured alarms for today, including their individual sound settings.
         alarm_items = self._dashboard_alarm_items(today_date, now, today_row, all_routine_blocks)
@@ -1998,6 +2012,14 @@ class MainWindow(Adw.ApplicationWindow):
                 label("No prayer timetable for today. Download this year from Prayer Times.", "muted", wrap=True),
                 0, 0, 3, 1,
             )
+        bank = database.day_balance()
+        balance_value = bank["balance"]
+        balance_text = f"{balance_value:+g} day bank" if balance_value else "0 day bank"
+        self.today_balance_label.set_text(balance_text)
+        service_running = self._service_active()
+        self.dashboard_service_badge.set_text("ALARMS RUNNING" if service_running else "ALARMS STOPPED")
+        self.dashboard_service_badge.remove_css_class("warning-pill" if service_running else "online-pill")
+        self.dashboard_service_badge.add_css_class("online-pill" if service_running else "warning-pill")
         self.data_badge.set_text("LOCAL DATA" if schedule_file else "DATA NEEDED")
         self.overview_note.set_text(
             f"Your plan, work progress and configured alarm times are calculated from local data. "
