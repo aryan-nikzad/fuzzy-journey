@@ -1311,7 +1311,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         schedule_settings = make_card()
         schedule_settings.append(label("Work schedule", "section-title"))
-        schedule_settings.append(label("The evening work block starts at this time by default. The first work block still ends at 14:00; the gap before this time remains free time.", "muted", wrap=True))
+        schedule_settings.append(label("The evening work block starts at this time by default. The first work block can use time up to 14:00; the gap before the evening start remains free time.", "muted", wrap=True))
         self.evening_start_entry = Gtk.Entry()
         self.evening_start_entry.set_placeholder_text("HH:MM")
         self.evening_start_entry.set_max_length(5)
@@ -1853,7 +1853,7 @@ class MainWindow(Adw.ApplicationWindow):
         all_routine_blocks = database.list_routine_blocks()
         plan_key = "75" if day_type == "75" else "50"
 
-        # Build only real work intervals: a 18:00–18:00 row means no evening block.
+        # Build only real work intervals; an empty evening block is omitted.
         work_entries: list[dict] = []
         if today_row and day_type != "off":
             for block_name, start_field, end_field in (
@@ -2029,7 +2029,10 @@ class MainWindow(Adw.ApplicationWindow):
             try:
                 overflow = str(today_row.get(f"WorkOverflow_{plan_key}") or "00:00")
                 hours, minutes = (int(part) for part in overflow.split(":"))
-                evening_duration = timedelta(hours=hours, minutes=minutes)
+                evening_duration = (
+                    timedelta(0) if day_type == "off"
+                    else timedelta(hours=hours, minutes=minutes)
+                )
                 evening_start_value = database.get_app_setting("evening_work_start", "18:00") or "18:00"
                 evening_start_clock = datetime.strptime(evening_start_value, "%H:%M").time()
                 isha_clock = datetime.strptime(today_row["Isha"], "%H:%M").time()
