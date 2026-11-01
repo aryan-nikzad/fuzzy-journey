@@ -547,21 +547,30 @@ class MainWindow(Adw.ApplicationWindow):
 
         card = make_card()
         card.append(label("Prayer times on this device", "section-title"))
-        card.append(label("The included Shahrekord 2026 schedule is bundled with the app. It remains available with the internet disconnected.", "muted", wrap=True))
-        card.append(label("Enable each prayer alarm independently. Times are resolved from the local calendar, not fixed clock times.", "field-hint", wrap=True))
+        card.append(label("Prayer data is stored locally after download. The selected year's CSV is used without an internet connection.", "muted", wrap=True))
+        card.append(label("Enable each prayer independently and choose its sound.", "field-hint", wrap=True))
         self.prayer_alarm_checks = {}
+        self.prayer_sound_dropdowns = {}
         prayer_settings = database.list_prayer_alarms()
-        prayer_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         for key in ("Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             check = Gtk.CheckButton(label=key)
-            check.set_active(bool(prayer_settings.get(key, {}).get("enabled", 0)))
-            check.connect("toggled", lambda widget, prayer=key: database.set_prayer_alarm(
-                prayer, widget.get_active(),
-                int(database.list_prayer_alarms().get(prayer, {}).get("offset_minutes", 0)),
-                bool(database.list_prayer_alarms().get(prayer, {}).get("sound_enabled", 1))))
+            check.set_hexpand(True)
+            settings = prayer_settings.get(key, {})
+            check.set_active(bool(settings.get("enabled", 0)))
+            dropdown = Gtk.DropDown.new_from_strings(list(SOUND_LABELS))
+            selected_sound = settings.get("sound_key", "classic")
+            dropdown.set_selected(SOUND_KEYS.index(selected_sound) if selected_sound in SOUND_KEYS else 0)
+            check.connect("toggled", lambda widget, prayer=key: self._update_prayer_alarm(
+                prayer, enabled=widget.get_active()))
+            dropdown.connect("notify::selected", lambda widget, _pspec, prayer=key: self._update_prayer_alarm(
+                prayer, sound_key=sound_key_from_dropdown(widget)))
+            row.append(check)
+            row.append(label("Sound", "field-hint"))
+            row.append(dropdown)
+            card.append(row)
             self.prayer_alarm_checks[key] = check
-            prayer_row.append(check)
-        card.append(prayer_row)
+            self.prayer_sound_dropdowns[key] = dropdown
         page.append(card)
 
         self.prayer_table = Gtk.ListBox()
@@ -570,6 +579,17 @@ class MainWindow(Adw.ApplicationWindow):
         self.prayer_page_note = label("", "muted", wrap=True)
         page.append(self.prayer_page_note)
         return self._scroll_page(page)
+
+    def _update_prayer_alarm(self, prayer_key: str, *, enabled: bool | None = None,
+                             sound_key: str | None = None) -> None:
+        current = database.list_prayer_alarms().get(prayer_key, {})
+        database.set_prayer_alarm(
+            prayer_key,
+            bool(current.get("enabled", 0)) if enabled is None else enabled,
+            int(current.get("offset_minutes", 0)),
+            bool(current.get("sound_enabled", 1)),
+            sound_key or str(current.get("sound_key") or "classic"),
+        )
 
     def _build_calendar(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
