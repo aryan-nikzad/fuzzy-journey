@@ -74,6 +74,12 @@ systemctl --user daemon-reload
 systemctl --user enable --now fuzzy-journey.service
 systemctl --user restart fuzzy-journey.service
 
+if ! command -v mpv >/dev/null 2>&1 && ! command -v ffplay >/dev/null 2>&1 \
+   && ! command -v mpg123 >/dev/null 2>&1 && ! command -v cvlc >/dev/null 2>&1; then
+    echo "Optional: install mpv to play personal MP3 alarm files:"
+    echo "  sudo apt install mpv"
+fi
+
 echo
 echo "Fuzzy Journey is installed."
 echo "  App:     $BIN_DIR/fuzzy-journey"
