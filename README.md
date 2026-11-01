@@ -10,13 +10,14 @@ The important design decision: **alarms do not rely on the GUI being open or the
 
 - A native-feeling GTK 4 / libadwaita desktop interface.
 - A daily overview with the next reminder, prayer times, and the 50% / 75% work and sleep plans.
-- Multiple reminders at different times, with selectable Classic, Gentle, Urgent or Digital alarm tones.
+- Multiple reminders at different times, with selectable Classic, Gentle, Urgent or Digital tones, or a personal MP3 / audio file.
+- Custom audio files are copied into the app's local data folder so moving the original file will not break an alarm.
 - Recurring reminders on selected weekdays, or a one-time reminder on a chosen date.
 - Critical desktop notifications and an audible alarm tone.
 - Reminders continue after the application window is closed.
 - Local SQLite storage; no account, cloud service, push provider, or network request is involved in alarm delivery.
 - A bundled Shahrekord 2026 schedule, so the first launch can show prayer times while offline.
-- Independent prayer alarms with a selectable tone for each prayer.
+- Independent prayer alarms with a selectable tone or personal audio file for each prayer.
 - Manual full-year prayer-data downloads (for example, 2027) for later offline use.
 - A reminders history, alarm service status, and a settings page.
 - A matching application ID and desktop entry so the app icon groups correctly in the GNOME dock/taskbar.
@@ -32,7 +33,7 @@ Install the desktop bindings and notification helper once:
 sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libnotify-bin
 ```
 
-For audio playback, use a working PipeWire or PulseAudio session. The service checks for `paplay`, `pw-play`, or `aplay` and uses the first available player.
+For built-in tones, use a working PipeWire or PulseAudio session; Fuzzy Journey checks for `paplay`, `pw-play`, or `aplay`. For personal MP3 / AAC / M4A / FLAC audio, install an MP3-capable player such as `mpv` (`sudo apt install mpv`), `ffmpeg` (`ffplay`), `mpg123`, or VLC. The selected file is imported into `~/.local/share/fuzzy-journey/custom-sounds/`.
 
 From the repository directory:
 
@@ -63,7 +64,7 @@ To remove the application while keeping your saved alarms and data:
 4. Save it. The reminder and selected tone are persisted in SQLite.
 5. The systemd user service checks the local database every five seconds and issues a desktop notification plus the selected alarm sound when the reminder is due.
 
-Prayer alarms also have independent enable switches and sound selectors. Routine blocks can alarm at their start, their end, or both. Wake-up, sleep, work and other activities use the same system. In Settings, schedule a one- or two-minute test alarm, then lock the screen (do not suspend the computer) to check that desktop audio is delivered.
+Prayer alarms also have independent enable switches, built-in tone selectors and custom audio file pickers. The Alarms and Daily Schedule editors have the same custom audio picker; the Settings test alarm can use a personal file too. Routine blocks can alarm at their start, their end, or both. Wake-up, sleep, work and other activities use the same system. In Settings, schedule a one- or two-minute test alarm, then lock the screen (do not suspend the computer) to check that desktop audio is delivered.
 
 You can close the GUI after creating reminders. The service continues in the background and is configured to start at user login.
 
@@ -102,7 +103,7 @@ No telemetry or cloud sync is implemented. The alarm daemon only reads the local
 
 ## Prayer-time data
 
-The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. The prayer page displays every remaining date in the available year; the calendar itself can navigate across months and years. Prayer alarms are resolved from the local date row, so they follow changing prayer times rather than using a fixed clock time.
+The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. The prayer page has previous / next year navigation. The current year opens on upcoming dates and has a full-year toggle; other downloaded years show the complete year. When a selected year is missing, the page offers a direct download action for that year. Prayer alarms are resolved from the local date row, so they follow changing prayer times rather than using a fixed clock time.
 
 Prayer-data downloads are optional and require a working connection. In Settings → Advanced · prayer data manager, enter a year such as `2027` and download its complete calendar. The app reuses `prayer_aio.py` and its Shahrekord / AlAdhan calculation settings. Existing raw and schedule CSVs are backed up before a forced refresh. Downloaded files stay in the app's local data folder and are used automatically when that year becomes current.
 
@@ -142,7 +143,7 @@ The tests cover weekday recurrence, one-time dates, the five-minute catch-up rul
 - An unclassified date defaults to **50%** and can be changed later, including after the day has passed.
 - Set a tracking start date to establish a zero-balance baseline; entries before that date are ignored.
 - The balance is allowed to become negative. For example, taking a day off first creates -1; two 75% days bring it back to zero.
-- Day types are stored by date in SQLite. The calendar is a planner, so entries can be assigned to future dates too. The balance includes all dates you have explicitly classified.
+- Day types are stored by date in SQLite. Only dates from the tracking start date through today are counted. Unclassified eligible dates default to 50%; dates before the baseline and future dates have no status and are excluded. You can change an eligible past date later.
 
 ## Dynamic routines
 
