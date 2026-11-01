@@ -53,8 +53,8 @@ def make_card(*, hero: bool = False) -> Gtk.Box:
     box.add_css_class("card")
     if hero:
         box.add_css_class("hero-card")
-    box.set_margin_top(5)
-    box.set_margin_bottom(5)
+    box.set_margin_top(0)
+    box.set_margin_bottom(0)
     return box
 
 
