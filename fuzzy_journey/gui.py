@@ -1516,7 +1516,7 @@ class MainWindow(Adw.ApplicationWindow):
         year = self.prayer_selected_year
         today = date.today()
         self.prayer_year_label.set_text(str(year))
-        self.prayer_scope_button.set_sensitive(True)
+        self.prayer_scope_button.set_sensitive(year == today.year)
         self.prayer_scope_button.set_label("Show upcoming dates" if self.prayer_full_year else "Show full year")
 
         path = schedule_path(year)
