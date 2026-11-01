@@ -53,8 +53,8 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory="$APP_DIR"
-Environment="PYTHONPATH=$APP_DIR"
+WorkingDirectory=$APP_DIR
+Environment=PYTHONPATH=$APP_DIR
 ExecStart=/usr/bin/python3 -m fuzzy_journey.alarm_daemon
 Restart=on-failure
 RestartSec=4
