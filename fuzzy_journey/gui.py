@@ -884,7 +884,8 @@ def main() -> int:
     app = FuzzyJourneyApp()
     # This is a desktop application, not a file handler or command-line tool.
     # Do not let GApplication interpret launcher arguments as files to open.
-    return app.run([sys.argv[0]])
+    # Passing None tells GApplication not to interpret process arguments as files.
+    return app.run(None)
 
 
 if __name__ == "__main__":

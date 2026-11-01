@@ -27,7 +27,8 @@ cp "$SOURCE_DIR/README.md" "$APP_DIR/"
 cat > "$BIN_DIR/fuzzy-journey" <<EOF
 #!/usr/bin/env bash
 export PYTHONPATH="$APP_DIR"
-exec /usr/bin/python3 -m fuzzy_journey.gui "$@"
+cd "$APP_DIR"
+exec /usr/bin/python3 -m fuzzy_journey.gui "\$@"
 EOF
 chmod +x "$BIN_DIR/fuzzy-journey"
 
