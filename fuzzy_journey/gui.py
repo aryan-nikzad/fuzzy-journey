@@ -882,7 +882,9 @@ class FuzzyJourneyApp(Adw.Application):
 
 def main() -> int:
     app = FuzzyJourneyApp()
-    return app.run(sys.argv)
+    # This is a desktop application, not a file handler or command-line tool.
+    # Do not let GApplication interpret launcher arguments as files to open.
+    return app.run([sys.argv[0]])
 
 
 if __name__ == "__main__":
