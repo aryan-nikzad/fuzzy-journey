@@ -167,7 +167,7 @@ def save_alarm(
                      sound_enabled, sound_key, custom_sound_path, enabled, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (*values[:7], now, now),
+                (*values[:8], now, now),
             )
             return int(cursor.lastrowid)
         connection.execute(
@@ -231,6 +231,25 @@ def get_day_entries(start_date: str, end_date: str, path: Path | str = DATABASE_
             (start_date, end_date),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def get_app_setting(key: str, default: str = "", path: Path | str = DATABASE_PATH) -> str:
+    initialize(path)
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key=?", (key,)
+        ).fetchone()
+    return str(row["setting_value"]) if row else default
+
+
+def set_app_setting(key: str, value: str, path: Path | str = DATABASE_PATH) -> None:
+    initialize(path)
+    with connect(path) as connection:
+        connection.execute(
+            """INSERT INTO app_settings(setting_key, setting_value) VALUES (?, ?)
+               ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value""",
+            (key, value),
+        )
 
 
 def get_app_setting(key: str, default: str = "", path: Path | str = DATABASE_PATH) -> str:
