@@ -66,6 +66,7 @@ def initialize(path: Path | str = DATABASE_PATH) -> None:
                 end_alarm_enabled INTEGER NOT NULL DEFAULT 0,
                 sound_enabled INTEGER NOT NULL DEFAULT 1,
                 sound_key TEXT NOT NULL DEFAULT 'classic',
+                custom_sound_path TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -77,6 +78,7 @@ def initialize(path: Path | str = DATABASE_PATH) -> None:
                 offset_minutes INTEGER NOT NULL DEFAULT 0,
                 sound_enabled INTEGER NOT NULL DEFAULT 1,
                 sound_key TEXT NOT NULL DEFAULT 'classic',
+                custom_sound_path TEXT,
                 updated_at TEXT NOT NULL
             );
 
