@@ -555,6 +555,9 @@ class MainWindow(Adw.ApplicationWindow):
         .time-label { font-size: 23px; font-weight: 800; font-feature-settings: "tnum"; }
         .dark-mode .time-label { color: #eef5fd; }
         .light-mode .time-label { color: #263b51; }
+        .dashboard-time { font-size: 14px; font-weight: 750; font-feature-settings: "tnum"; }
+        .dark-mode .dashboard-time { color: #a3d8ef; }
+        .light-mode .dashboard-time { color: #3e718b; }
         .alarm-title { font-size: 13px; font-weight: 700; }
         .dark-mode .alarm-title { color: #e8eff8; }
         .light-mode .alarm-title { color: #2b3b50; }
@@ -1714,7 +1717,7 @@ class MainWindow(Adw.ApplicationWindow):
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         row.set_margin_top(2)
         row.set_margin_bottom(2)
-        time_label = label(time_value, "time-label")
+        time_label = label(time_value, "dashboard-time")
         time_label.set_width_chars(6)
         row.append(time_label)
         text_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
@@ -1786,6 +1789,8 @@ class MainWindow(Adw.ApplicationWindow):
                 })
 
         for block in routine_blocks:
+            if day_type == "off":
+                break
             if str(block.get("category", "")).lower() != "work":
                 continue
             interval = schedule_range(today_date, block.get("start_time"), block.get("end_time"))
