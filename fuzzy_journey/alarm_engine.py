@@ -109,3 +109,68 @@ def fire_due_alarms(
             fired.append(alarm)
 
     return fired
+
+
+def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None = None) -> list[dict[str, Any]]:
+    """Resolve prayer and routine alarms from local data and claim each event once."""
+    import csv
+    from .paths import schedule_path
+
+    now = now or datetime.now().astimezone().replace(tzinfo=None)
+    path = db_path or str(database.DATABASE_PATH)
+    database.initialize(path)
+    events: list[dict[str, Any]] = []
+    schedule_file = schedule_path(now.year)
+    prayer_times: dict[str, str] = {}
+    if schedule_file and schedule_file.is_file():
+        with schedule_file.open("r", encoding="utf-8-sig", newline="") as handle:
+            for row in csv.DictReader(handle):
+                try:
+                    row_day = datetime.strptime(row["Date"], "%d-%m-%Y").date()
+                except (KeyError, ValueError):
+                    continue
+                if row_day == now.date():
+                    prayer_times = row
+                    break
+
+    candidates: list[tuple[str, str, str, bool]] = []
+    prayer_settings = database.list_prayer_alarms(path)
+    for key, settings in prayer_settings.items():
+        if not settings.get("enabled") or not prayer_times.get(key):
+            continue
+        try:
+            base = datetime.combine(now.date(), time.fromisoformat(prayer_times[key]))
+        except ValueError:
+            continue
+        due = base + timedelta(minutes=int(settings.get("offset_minutes") or 0))
+        candidates.append((f"prayer:{key}", f"{key} prayer", due.strftime("%H:%M"), bool(settings.get("sound_enabled", 1))))
+
+    for block in database.list_routine_blocks(path):
+        if not block.get("enabled") or not block.get("alarm_enabled"):
+            continue
+        if not (int(block.get("days_mask") or 0) & WEEKDAY_BITS[now.weekday()]):
+            continue
+        candidates.append((f"routine:{block['id']}", block["title"], block["start_time"], bool(block["sound_enabled"])))
+
+    with database.connect(path) as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        for event_key, title, clock, sound in candidates:
+            due = datetime.combine(now.date(), time.fromisoformat(clock))
+            elapsed = now - due
+            if elapsed < timedelta(0) or elapsed > MISSED_ALARM_GRACE:
+                continue
+            try:
+                connection.execute(
+                    "INSERT INTO schedule_event_fires(event_key, event_date, fired_at) VALUES (?, ?, ?)",
+                    (event_key, now.date().isoformat(), now.isoformat(timespec="seconds")),
+                )
+            except Exception as exc:
+                if "UNIQUE" in str(exc).upper():
+                    continue
+                raise
+            connection.execute(
+                "INSERT INTO alarm_events(alarm_id, title, fired_at) VALUES (NULL, ?, ?)",
+                (title, now.isoformat(timespec="seconds")),
+            )
+            events.append({"id": event_key, "title": title, "sound_enabled": sound})
+    return events

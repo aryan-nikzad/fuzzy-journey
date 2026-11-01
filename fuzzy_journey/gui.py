@@ -234,6 +234,9 @@ class AlarmForm(Gtk.Window):
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application):
         super().__init__(application=app)
+        headerbar = Gtk.HeaderBar()
+        headerbar.set_show_title_buttons(True)
+        self.set_titlebar(headerbar)
         self.set_title("Fuzzy Journey")
         self.set_default_size(1160, 780)
         self.set_size_request(760, 560)
@@ -269,7 +272,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.nav_buttons: dict[str, Gtk.Button] = {}
         nav_items = (
             ("overview", "Overview", "view-grid-symbolic"),
-            ("alarms", "Reminders", "alarm-symbolic"),
+            ("alarms", "Alarms", "alarm-symbolic"),
+            ("calendar", "Calendar & time bank", "x-office-calendar-symbolic"),
+            ("schedule", "Daily schedule", "view-timeline-symbolic"),
             ("prayers", "Prayer times", "view-calendar-symbolic"),
             ("settings", "Settings", "preferences-system-symbolic"),
         )
@@ -328,6 +333,8 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.stack.add_named(self._build_overview(), "overview")
         self.stack.add_named(self._build_alarms(), "alarms")
+        self.stack.add_named(self._build_calendar(), "calendar")
+        self.stack.add_named(self._build_schedule(), "schedule")
         self.stack.add_named(self._build_prayers(), "prayers")
         self.stack.add_named(self._build_settings(), "settings")
         self._navigate(None, "overview")
@@ -386,7 +393,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.stack.set_visible_child_name(page)
         titles = {
             "overview": ("Overview", "Your day, at a glance"),
-            "alarms": ("Reminders", "Build a routine that rings when it matters"),
+            "alarms": ("Alarms", "Independent reminders for anything that matters"),
+            "calendar": ("Calendar & time bank", "Plan the whole year and track earned or borrowed days off"),
+            "schedule": ("Daily schedule", "Build and change your recurring daily rhythm"),
             "prayers": ("Prayer times", "A local schedule, ready without internet"),
             "settings": ("Settings", "Local data and background alarm service"),
         }
@@ -446,6 +455,8 @@ class MainWindow(Adw.ApplicationWindow):
         plan_heading = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         plan_heading.append(label("Your work / rest plan", "section-title"))
         plan_heading.append(label("Calculated from Fajr and Isha, using your saved local schedule.", "section-description"))
+        self.today_plan_badge = label("TODAY'S PLAN · 50%", "online-pill")
+        plan_heading.append(self.today_plan_badge)
         page.append(plan_heading)
 
         plan_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -519,6 +530,20 @@ class MainWindow(Adw.ApplicationWindow):
         card = make_card()
         card.append(label("Prayer times on this device", "section-title"))
         card.append(label("The included Shahrekord 2026 schedule is bundled with the app. It remains available with the internet disconnected.", "muted", wrap=True))
+        card.append(label("Enable each prayer alarm independently. Times are resolved from the local calendar, not fixed clock times.", "field-hint", wrap=True))
+        self.prayer_alarm_checks = {}
+        prayer_settings = database.list_prayer_alarms()
+        prayer_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        for key in ("Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha"):
+            check = Gtk.CheckButton(label=key)
+            check.set_active(bool(prayer_settings.get(key, {}).get("enabled", 0)))
+            check.connect("toggled", lambda widget, prayer=key: database.set_prayer_alarm(
+                prayer, widget.get_active(),
+                int(database.list_prayer_alarms().get(prayer, {}).get("offset_minutes", 0)),
+                bool(database.list_prayer_alarms().get(prayer, {}).get("sound_enabled", 1))))
+            self.prayer_alarm_checks[key] = check
+            prayer_row.append(check)
+        card.append(prayer_row)
         page.append(card)
 
         self.prayer_table = Gtk.ListBox()
@@ -527,6 +552,228 @@ class MainWindow(Adw.ApplicationWindow):
         self.prayer_page_note = label("", "muted", wrap=True)
         page.append(self.prayer_page_note)
         return self._scroll_page(page)
+
+    def _build_calendar(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        page.add_css_class("main-content")
+        balance = make_card(hero=True)
+        balance.append(label("YOUR TIME BANK", "eyebrow"))
+        self.balance_value = label("0 days", "hero-time")
+        balance.append(self.balance_value)
+        self.balance_detail = label("Two 75% days earn one day off. A day off can put the balance below zero.", "muted", wrap=True)
+        balance.append(self.balance_detail)
+        stats = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=18)
+        self.balance_earned = label("Earned: 0", "metric")
+        self.balance_used = label("Used: 0", "metric")
+        self.balance_debt = label("Debt: 0", "metric")
+        stats.append(self.balance_earned)
+        stats.append(self.balance_used)
+        stats.append(self.balance_debt)
+        balance.append(stats)
+        page.append(balance)
+
+        month_card = make_card()
+        controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        prev = Gtk.Button.new_from_icon_name("go-previous-symbolic")
+        prev.connect("clicked", lambda _b: self._shift_calendar_month(-1))
+        controls.append(prev)
+        self.calendar_month_title = label("", "section-title")
+        self.calendar_month_title.set_hexpand(True)
+        self.calendar_month_title.set_xalign(0.5)
+        controls.append(self.calendar_month_title)
+        nxt = Gtk.Button.new_from_icon_name("go-next-symbolic")
+        nxt.connect("clicked", lambda _b: self._shift_calendar_month(1))
+        controls.append(nxt)
+        month_card.append(controls)
+        self.calendar_grid = Gtk.Grid()
+        self.calendar_grid.set_column_homogeneous(True)
+        self.calendar_grid.set_row_spacing(5)
+        self.calendar_grid.set_column_spacing(5)
+        month_card.append(self.calendar_grid)
+        page.append(month_card)
+
+        edit = make_card()
+        edit.append(label("Selected day", "section-title"))
+        self.selected_day_label = label(date.today().strftime("%A, %d %B %Y"), "muted")
+        edit.append(self.selected_day_label)
+        self.day_type_dropdown = Gtk.DropDown.new_from_strings(["Normal · 50%", "Intensive · 75%", "Day off"])
+        edit.append(self.day_type_dropdown)
+        self.day_notes = Gtk.Entry()
+        self.day_notes.set_placeholder_text("Optional note for this day")
+        edit.append(self.day_notes)
+        save = Gtk.Button(label="Save day type")
+        save.add_css_class("suggested-action")
+        save.connect("clicked", self._save_selected_day)
+        edit.append(save)
+        page.append(edit)
+        self.calendar_selected_date = date.today()
+        self.calendar_month = date.today().replace(day=1)
+        self._render_calendar()
+        return self._scroll_page(page)
+
+    def _shift_calendar_month(self, amount: int) -> None:
+        year, month = self.calendar_month.year, self.calendar_month.month + amount
+        if month < 1:
+            year, month = year - 1, 12
+        elif month > 12:
+            year, month = year + 1, 1
+        self.calendar_month = date(year, month, 1)
+        self._render_calendar()
+
+    def _select_calendar_day(self, day: date) -> None:
+        self.calendar_selected_date = day
+        self.selected_day_label.set_text(day.strftime("%A, %d %B %Y"))
+        entries = database.get_day_entries(day.isoformat(), day.isoformat())
+        saved = entries[0] if entries else None
+        self.day_type_dropdown.set_selected({"50": 0, "75": 1, "off": 2}.get(saved["day_type"], 0) if saved else 0)
+        self.day_notes.set_text(saved["notes"] if saved else "")
+        self._render_calendar()
+
+    def _save_selected_day(self, _button: Gtk.Button) -> None:
+        kind = {0: "50", 1: "75", 2: "off"}.get(self.day_type_dropdown.get_selected(), "50")
+        database.set_day_type(self.calendar_selected_date.isoformat(), kind, self.day_notes.get_text().strip())
+        self.refresh_calendar()
+        self.refresh_overview()
+
+    def _render_calendar(self) -> None:
+        if not hasattr(self, "calendar_grid"):
+            return
+        clear_grid = self.calendar_grid.get_first_child()
+        while clear_grid:
+            following = clear_grid.get_next_sibling()
+            self.calendar_grid.remove(clear_grid)
+            clear_grid = following
+        self.calendar_month_title.set_text(self.calendar_month.strftime("%B %Y"))
+        for col, name in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")):
+            self.calendar_grid.attach(label(name, "prayer-name", xalign=0.5), col, 0, 1, 1)
+        import calendar as _calendar
+        month = _calendar.Calendar(firstweekday=0)
+        entries = {item["day_date"]: item for item in database.get_day_entries(
+            self.calendar_month.isoformat(), date(self.calendar_month.year, self.calendar_month.month,
+            _calendar.monthrange(self.calendar_month.year, self.calendar_month.month)[1]).isoformat())}
+        for row, week in enumerate(month.monthdatescalendar(self.calendar_month.year, self.calendar_month.month), start=1):
+            for col, day in enumerate(week):
+                if day.month != self.calendar_month.month:
+                    text_value = " "
+                else:
+                    entry = entries.get(day.isoformat())
+                    suffix = {"50": " · 50", "75": " · 75", "off": " · OFF"}.get(entry["day_type"], "") if entry else ""
+                    text_value = f"{day.day}{suffix}"
+                button = Gtk.Button(label=text_value)
+                button.set_sensitive(day.month == self.calendar_month.month)
+                button.set_size_request(68, 42)
+                if day == self.calendar_selected_date:
+                    button.add_css_class("suggested-action")
+                elif entries.get(day.isoformat(), {}).get("day_type") == "75":
+                    button.add_css_class("success")
+                elif entries.get(day.isoformat(), {}).get("day_type") == "off":
+                    button.add_css_class("warning")
+                button.connect("clicked", lambda _b, selected=day: self._select_calendar_day(selected))
+                self.calendar_grid.attach(button, col, row, 1, 1)
+
+    def refresh_calendar(self) -> None:
+        if not hasattr(self, "balance_value"):
+            return
+        stats = database.day_balance()
+        balance = stats["balance"]
+        self.balance_value.set_text(f"{balance:+g} days" if balance else "0 days")
+        self.balance_detail.set_text("Each 75% day earns half a day. Each day off spends one day. Negative balance means time owed.")
+        self.balance_earned.set_text(f"Earned: {stats['earned']:g}")
+        self.balance_used.set_text(f"Used: {stats['consumed']:g}")
+        self.balance_debt.set_text(f"Debt: {max(0, -balance):g}")
+        self._render_calendar()
+
+    def _build_schedule(self) -> Gtk.Widget:
+        page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+        page.add_css_class("main-content")
+        intro = make_card()
+        intro.append(label("Your recurring time blocks", "section-title"))
+        intro.append(label("Add work, sleep, wake-up, girlfriend calls, gym, reading, meals or any other activity. Each block has its own days and alarm setting.", "muted", wrap=True))
+        add = Gtk.Button(label="＋  Add time block")
+        add.add_css_class("suggested-action")
+        add.connect("clicked", self._open_routine_form)
+        intro.append(add)
+        page.append(intro)
+        self.routine_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        page.append(self.routine_list)
+        return self._scroll_page(page)
+
+    def _open_routine_form(self, _button=None, block: dict | None = None) -> None:
+        dialog = Gtk.Window(transient_for=self, modal=True, title="Edit time block" if block else "Add time block")
+        dialog.set_default_size(420, 520)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_margin_top(20); box.set_margin_bottom(20); box.set_margin_start(22); box.set_margin_end(22)
+        box.append(label("Activity name", "field-title"))
+        title = Gtk.Entry(); title.set_placeholder_text("e.g. Girlfriend call"); title.set_text(block["title"] if block else ""); box.append(title)
+        box.append(label("Category", "field-title"))
+        category = Gtk.DropDown.new_from_strings(["Personal", "Work", "Sleep", "Wake-up", "Call", "Prayer", "Health"])
+        category.set_selected(["personal","work","sleep","wake","call","prayer","health"].index(block["category"]) if block and block["category"] in ["personal","work","sleep","wake","call","prayer","health"] else 0)
+        box.append(category)
+        box.append(label("Start time · HH:MM", "field-title"))
+        start = Gtk.Entry(); start.set_text(block["start_time"] if block else "16:00"); box.append(start)
+        box.append(label("End time · HH:MM", "field-title"))
+        end = Gtk.Entry(); end.set_text(block["end_time"] if block else "18:00"); box.append(end)
+        box.append(label("Repeat on", "field-title"))
+        checks = []
+        day_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+        old_mask = int(block["days_mask"]) if block else 127
+        for index, day in enumerate(WEEKDAYS):
+            check = Gtk.CheckButton(label=day); check.set_active(bool(old_mask & (1 << index))); checks.append(check); day_row.append(check)
+        box.append(day_row)
+        alarm = Gtk.CheckButton(label="Ring at the start of this block"); alarm.set_active(bool(block["alarm_enabled"]) if block else False); box.append(alarm)
+        sound = Gtk.CheckButton(label="Play sound"); sound.set_active(bool(block["sound_enabled"]) if block else True); box.append(sound)
+        enabled = Gtk.CheckButton(label="Block enabled"); enabled.set_active(bool(block["enabled"]) if block else True); box.append(enabled)
+        status = label("", "error-text", wrap=True); box.append(status)
+        actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); actions.set_halign(Gtk.Align.END)
+        cancel = Gtk.Button(label="Cancel"); cancel.connect("clicked", lambda _b: dialog.close()); actions.append(cancel)
+        save = Gtk.Button(label="Save block"); save.add_css_class("suggested-action")
+        def save_block(_b):
+            mask = sum(1 << i for i, item in enumerate(checks) if item.get_active())
+            try:
+                database.save_routine_block(title=title.get_text(), category=["personal","work","sleep","wake","call","prayer","health"][category.get_selected()],
+                    start_time=start.get_text().strip(), end_time=end.get_text().strip(), days_mask=mask,
+                    alarm_enabled=alarm.get_active(), sound_enabled=sound.get_active(), enabled=enabled.get_active(),
+                    block_id=block["id"] if block else None)
+            except ValueError:
+                status.set_text("Enter valid 24-hour times and select at least one day.")
+                return
+            dialog.close(); self.refresh_schedule()
+        save.connect("clicked", save_block); actions.append(save); box.append(actions)
+        dialog.set_child(box); dialog.present()
+
+    def refresh_schedule(self) -> None:
+        if not hasattr(self, "routine_list"):
+            return
+        child = self.routine_list.get_first_child()
+        while child:
+            nxt = child.get_next_sibling(); self.routine_list.remove(child); child = nxt
+        blocks = database.list_routine_blocks()
+        if not blocks:
+            self.routine_list.append(label("No custom time blocks yet.", "muted"))
+        for block in blocks:
+            row = make_card()
+            heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            heading.append(label(block["start_time"], "time-label"))
+            title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2); title_box.set_hexpand(True)
+            title_box.append(label(block["title"], "alarm-title"))
+            title_box.append(label(f"{block['category'].title()} · until {block['end_time']} · {format_repeat(block)}", "alarm-meta"))
+            heading.append(title_box)
+            edit = Gtk.Button.new_from_icon_name("document-edit-symbolic")
+            edit.add_css_class("flat")
+            edit.set_tooltip_text("Edit time block")
+            edit.connect("clicked", lambda _b, item=block: self._open_routine_form(block=item))
+            heading.append(edit)
+            delete = Gtk.Button.new_from_icon_name("user-trash-symbolic")
+            delete.add_css_class("flat")
+            delete.set_tooltip_text("Delete time block")
+            delete.connect("clicked", lambda _b, bid=block["id"]: (database.delete_routine_block(bid), self.refresh_schedule()))
+            heading.append(delete)
+            switch = Gtk.Switch(); switch.set_active(bool(block["enabled"])); switch.set_valign(Gtk.Align.CENTER)
+            switch.connect("notify::active", lambda sw, _p, bid=block["id"]: (database.set_routine_enabled(bid, sw.get_active()), self.refresh_schedule()))
+            heading.append(switch)
+            row.append(heading)
+            row.append(label("Start alarm enabled" if block["alarm_enabled"] else "No start alarm", "field-hint"))
+            self.routine_list.append(row)
 
     def _build_settings(self) -> Gtk.Widget:
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
@@ -768,6 +1015,10 @@ class MainWindow(Adw.ApplicationWindow):
             self.next_alarm_title.set_text("No enabled reminders. Add one to keep your routine on track.")
 
         today, _rows, path = load_schedule()
+        day_entry = database.get_day_entries(now.date().isoformat(), now.date().isoformat())
+        selected_plan = day_entry[0]["day_type"] if day_entry else "50"
+        if hasattr(self, "today_plan_badge"):
+            self.today_plan_badge.set_text("TODAY'S PLAN · " + ("75%" if selected_plan == "75" else "DAY OFF" if selected_plan == "off" else "50%"))
         clear_list(self.prayer_grid)
         if today:
             for index, (name, field) in enumerate(PRAYER_FIELDS):
@@ -788,7 +1039,9 @@ class MainWindow(Adw.ApplicationWindow):
                 f"Evening  {today.get('EveningBlockStart_75')}–{today.get('EveningBlockEnd_75')}\n"
                 f"Sleep    {duration_text(today.get('SleepDuration_75', '—'))}"
             )
-            self.overview_note.set_text(f"Using local schedule data · {path.name}")
+            start_field = "MorningBlockStart_75" if selected_plan == "75" else "MorningBlockStart_50"
+            start_value = today.get(start_field, "—")
+            self.overview_note.set_text(f"Work starts at {start_value} · selected day: {selected_plan if selected_plan == 'off' else selected_plan + '%'} · {path.name}")
         else:
             self.prayer_grid.attach(label("No prayer schedule found for today. The app itself still works offline; add this year's CSV or refresh it when connected.", "muted", wrap=True), 0, 0, 3, 1)
             self.plan_50_value.set_text("—")
@@ -818,7 +1071,7 @@ class MainWindow(Adw.ApplicationWindow):
         if start_index is None:
             self.prayer_page_note.set_text("No upcoming dates are present in this local file. Refresh the prayer data when connected.")
             return
-        for row_data in rows[start_index:start_index + 14]:
+        for row_data in rows[start_index:]:
             try:
                 row_date = datetime.strptime(row_data["Date"], "%d-%m-%Y").date()
             except (KeyError, ValueError):
@@ -843,7 +1096,7 @@ class MainWindow(Adw.ApplicationWindow):
                 line_box.append(cell)
             line.set_child(line_box)
             self.prayer_table.append(line)
-        self.prayer_page_note.set_text("Showing the next 14 days available in the bundled or downloaded local CSV.")
+        self.prayer_page_note.set_text(f"Showing every remaining date in {today.year} from the local schedule ({len(rows) - start_index} days). Use the full-year calendar for day-type planning.")
 
     def refresh_settings(self) -> None:
         active = self._service_active()
@@ -853,6 +1106,8 @@ class MainWindow(Adw.ApplicationWindow):
     def refresh_all(self) -> None:
         self.refresh_alarms()
         self.refresh_overview()
+        self.refresh_calendar()
+        self.refresh_schedule()
         self.refresh_prayer_page()
         self.refresh_settings()
 

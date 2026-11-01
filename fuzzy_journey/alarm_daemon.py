@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 
-from .alarm_engine import fire_due_alarms
+from .alarm_engine import fire_due_alarms, fire_due_schedule_events
 from .notifications import deliver_alarm
 from .paths import DATABASE_PATH, ensure_data_dir
 
@@ -19,7 +19,8 @@ def main() -> None:
     log.info("Alarm service started. Local database: %s", DATABASE_PATH)
     while True:
         try:
-            for alarm in fire_due_alarms():
+            due_events = fire_due_alarms() + fire_due_schedule_events()
+            for alarm in due_events:
                 log.info("Firing alarm %s (%s)", alarm["id"], alarm["title"])
                 deliver_alarm(alarm)
         except Exception:

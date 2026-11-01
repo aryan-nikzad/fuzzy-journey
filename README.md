@@ -17,7 +17,8 @@ The important design decision: **alarms do not rely on the GUI being open or the
 - Local SQLite storage; no account, cloud service, push provider, or network request is involved in alarm delivery.
 - A bundled Shahrekord 2026 schedule, so the first launch can show prayer times while offline.
 - Optional prayer-data refresh from AlAdhan when an internet connection is available.
-- A reminders history, alarm service status, and a small settings page.
+- A reminders history, alarm service status, and a settings page.
+- Native desktop header-bar controls for moving, minimizing, maximizing and closing the window.
 
 ## Linux installation
 
@@ -97,7 +98,7 @@ No telemetry or cloud sync is implemented. The alarm daemon only reads the local
 
 ## Prayer-time data
 
-The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. It covers the 2026 calendar year.
+The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. The prayer page displays every remaining date in the available year; the calendar itself can navigate across months and years. Prayer alarms are resolved from the local date row, so they follow changing prayer times rather than using a fixed clock time.
 
 Prayer-data refresh is optional and requires a working connection. The app reuses the original `prayer_aio.py` updater and its AlAdhan calculation settings. Existing files are backed up by the original updater before replacement. If a later year is not bundled, add or refresh that year's CSV when connected; custom alarms do not depend on prayer-time data.
 
@@ -127,7 +128,19 @@ Run the alarm scheduling tests with the standard library:
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The tests cover weekday recurrence, one-time dates, the five-minute catch-up rule, and one-time delivery persistence.
+The tests cover weekday recurrence, one-time dates, the five-minute catch-up rule, one-time delivery persistence, routine alarm deduplication, and time-bank accounting.
+
+## Day types and time bank
+
+- **50% day:** neutral; it does not change the balance.
+- **75% day:** earns **+0.5 day**.
+- **Day off:** spends **1 day**.
+- The balance is allowed to become negative. For example, taking a day off first creates -1; two 75% days bring it back to zero.
+- Day types are stored by date in SQLite. The calendar is a planner, so entries can be assigned to future dates too. The balance includes all dates you have explicitly classified.
+
+## Dynamic routines
+
+Create recurring blocks for work, sleep, wake-up, girlfriend calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state and optional start alarm. Edit or delete blocks as your routine changes. The routine alarm is independent of the GUI and is checked by the same offline daemon.
 
 ## Project layout
 

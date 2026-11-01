@@ -5,7 +5,7 @@ import unittest
 from datetime import datetime
 from pathlib import Path
 
-from fuzzy_journey.alarm_engine import fire_due_alarms, next_occurrence, should_fire
+from fuzzy_journey.alarm_engine import fire_due_alarms, fire_due_schedule_events, next_occurrence, should_fire
 
 
 class AlarmEngineTests(unittest.TestCase):
@@ -62,6 +62,31 @@ class AlarmEngineTests(unittest.TestCase):
             )
             self.assertEqual(fire_due_alarms(datetime(2026, 11, 2, 7, 30), db_path=str(db)), [])
             self.assertEqual(list_alarms(db)[0]["enabled"], 0)
+
+    def test_two_intensive_days_earn_one_day_and_day_off_can_create_debt(self):
+        from fuzzy_journey.database import initialize, set_day_type, day_balance
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "days.sqlite3"
+            initialize(db)
+            set_day_type("2026-11-02", "75", path=db)
+            set_day_type("2026-11-03", "75", path=db)
+            self.assertEqual(day_balance(db)["balance"], 1.0)
+            set_day_type("2026-11-04", "off", path=db)
+            self.assertEqual(day_balance(db)["balance"], 0.0)
+            set_day_type("2026-11-05", "off", path=db)
+            self.assertEqual(day_balance(db)["balance"], -1.0)
+
+    def test_routine_alarm_fires_once_per_day(self):
+        from fuzzy_journey.database import initialize, save_routine_block
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "routines.sqlite3"
+            initialize(db)
+            save_routine_block(title="Work starts", category="work", start_time="08:00",
+                end_time="12:00", days_mask=127, alarm_enabled=True, path=db)
+            first = fire_due_schedule_events(datetime(2026, 11, 2, 8, 0), db_path=str(db))
+            second = fire_due_schedule_events(datetime(2026, 11, 2, 8, 1), db_path=str(db))
+            self.assertEqual([event["title"] for event in first], ["Work starts"])
+            self.assertEqual(second, [])
 
     def test_firing_is_persisted_and_one_shot_is_disabled(self):
         with tempfile.TemporaryDirectory() as temp:
