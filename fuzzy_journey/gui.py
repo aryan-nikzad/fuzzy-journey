@@ -938,6 +938,7 @@ class MainWindow(Adw.ApplicationWindow):
             return
         database.set_time_bank_start_date(value)
         self.time_bank_start_status.set_text(f"Time bank now starts on {value}. Earlier entries are ignored.")
+        self._select_calendar_day(self.calendar_selected_date)
         self.refresh_calendar()
 
     def _save_selected_day(self, _button: Gtk.Button) -> None:
