@@ -835,7 +835,7 @@ def main() -> None:
     if (args.today or args.tomorrow or (args.date and not args.override)) and args.evening_start is None:
         return show_schedule()
 
-    if args.schedule_only and not (
+    if args.schedule_only and args.evening_start is None and not (
         args.override or args.flex_time is not None or args.reset_flex
     ):
         return show_schedule()
@@ -855,6 +855,11 @@ def main() -> None:
     # -----------------------------------------------------------
     raw_exists = csv_matches_header(RAW_FILE, RAW_FIELDNAMES)
     sched_exists = csv_matches_header(SCHEDULE_FILE, SCHEDULE_FIELDNAMES)
+
+    if args.evening_start is not None and not args.override and not raw_exists:
+        print(f"Cannot rebuild the {YEAR} schedule: local raw data is missing at {RAW_FILE}.")
+        print("Download the year's data first; changing the evening start itself does not fetch data.")
+        return 1
 
     # Resolve the flex-time input for this run.
     if args.reset_flex:
