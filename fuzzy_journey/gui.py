@@ -1309,6 +1309,27 @@ class MainWindow(Adw.ApplicationWindow):
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
         page.add_css_class("main-content")
 
+        schedule_settings = make_card()
+        schedule_settings.append(label("Work schedule", "section-title"))
+        schedule_settings.append(label("The evening work block starts at this time by default. The first work block still ends at 14:00; the gap before this time remains free time.", "muted", wrap=True))
+        self.evening_start_entry = Gtk.Entry()
+        self.evening_start_entry.set_placeholder_text("HH:MM")
+        self.evening_start_entry.set_max_length(5)
+        self.evening_start_entry.set_text(
+            database.get_app_setting("evening_work_start", "18:00") or "18:00"
+        )
+        evening_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        evening_row.append(label("Evening work starts", "field-title"))
+        evening_row.append(self.evening_start_entry)
+        apply_evening = Gtk.Button(label="Apply to local schedules")
+        apply_evening.add_css_class("suggested-action")
+        apply_evening.connect("clicked", self._apply_evening_start)
+        evening_row.append(apply_evening)
+        schedule_settings.append(evening_row)
+        self.evening_start_status = label("Default: 18:00 · changes are processed locally.", "field-hint", wrap=True)
+        schedule_settings.append(self.evening_start_status)
+        page.append(schedule_settings)
+
         test_card = make_card()
         test_card.append(label("Test an alarm", "section-title"))
         test_card.append(label("Schedule a real one-time alarm in one or two minutes. Lock the screen to test delivery; do not suspend the computer.", "muted", wrap=True))
@@ -1417,6 +1438,86 @@ class MainWindow(Adw.ApplicationWindow):
             self.settings_service_status.set_text("systemd user service is unavailable.")
         self.refresh_all()
 
+    def _apply_evening_start(self, button: Gtk.Button) -> None:
+        value = self.evening_start_entry.get_text().strip()
+        try:
+            parsed = datetime.strptime(value, "%H:%M").time()
+            if parsed.hour < 14:
+                raise ValueError
+        except ValueError:
+            self.evening_start_status.set_text("Enter a valid time from 14:00 to 23:59.")
+            return
+
+        button.set_sensitive(False)
+        self.evening_start_entry.set_sensitive(False)
+        self.evening_start_status.set_text("Rebuilding derived schedules from local raw data…")
+
+        def worker():
+            ensure_data_dir()
+            script = APP_ROOT / "prayer_aio.py"
+            raw_sources: dict[tuple[str, int], Path] = {}
+            pattern = re.compile(r"(?P<city>.+)_prayer_times_(?P<year>\d{4})_raw\.csv$")
+            for root in (APP_DATA_DIR, APP_ROOT):
+                if not root.is_dir():
+                    continue
+                for raw_path in root.glob("*_prayer_times_*_raw.csv"):
+                    match = pattern.match(raw_path.name)
+                    if not match:
+                        continue
+                    key = (match.group("city"), int(match.group("year")))
+                    raw_sources.setdefault(key, raw_path)
+
+            messages = []
+            succeeded = True
+            try:
+                for (city, year), source in sorted(raw_sources.items(), key=lambda item: item[0][1]):
+                    local_raw = APP_DATA_DIR / source.name
+                    if source.resolve() != local_raw.resolve():
+                        shutil.copy2(source, local_raw)
+                    command = [
+                        sys.executable, str(script), "--no-show",
+                        "--city", city, "--year", str(year),
+                        "--evening-start", value,
+                    ]
+                    result = subprocess.run(
+                        command, cwd=APP_DATA_DIR, capture_output=True, text=True,
+                        timeout=180, check=False,
+                    )
+                    if result.returncode != 0:
+                        succeeded = False
+                        messages.append(
+                            f"{year}: {result.stderr.strip()[-350:] or result.stdout.strip()[-350:] or 'schedule rebuild failed'}"
+                        )
+                        break
+                    messages.append(str(year))
+
+                if succeeded:
+                    database.set_app_setting("evening_work_start", value)
+                    if messages:
+                        message = f"Evening work now starts at {value}. Updated local schedules: {', '.join(messages)}."
+                    else:
+                        message = (
+                            f"Evening work now starts at {value}. No raw year files were available to rebuild; "
+                            "this setting will be used when you next download a year."
+                        )
+                else:
+                    message = "Could not rebuild every local schedule. The previous schedules were backed up. " + " · ".join(messages)
+            except (OSError, subprocess.SubprocessError) as exc:
+                succeeded = False
+                message = f"Could not rebuild local schedules: {exc}"
+
+            GLib.idle_add(self._finish_evening_start, button, succeeded, message)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_evening_start(self, button: Gtk.Button, success: bool, message: str) -> bool:
+        button.set_sensitive(True)
+        self.evening_start_entry.set_sensitive(True)
+        self.evening_start_status.set_text(message)
+        if success:
+            self.refresh_all()
+        return GLib.SOURCE_REMOVE
+
     def _refresh_prayer_data(self, button: Gtk.Button, year_entry: Gtk.Entry | None = None) -> None:
         try:
             year = int(year_entry.get_text().strip()) if year_entry else date.today().year
@@ -1441,6 +1542,7 @@ class MainWindow(Adw.ApplicationWindow):
                 sys.executable, str(script), "--override", "--no-show",
                 "--city", "shahrekord", "--year", str(year),
                 "--lat", "32.3261", "--lon", "50.8572", "--method", "7",
+                "--evening-start", database.get_app_setting("evening_work_start", "18:00"),
             ]
             try:
                 result = subprocess.run(
