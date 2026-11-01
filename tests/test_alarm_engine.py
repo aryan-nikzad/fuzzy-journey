@@ -64,10 +64,11 @@ class AlarmEngineTests(unittest.TestCase):
             self.assertEqual(list_alarms(db)[0]["enabled"], 0)
 
     def test_two_intensive_days_earn_one_day_and_day_off_can_create_debt(self):
-        from fuzzy_journey.database import initialize, set_day_type, day_balance
+        from fuzzy_journey.database import initialize, set_day_type, set_time_bank_start_date, day_balance
         with tempfile.TemporaryDirectory() as temp:
             db = Path(temp) / "days.sqlite3"
             initialize(db)
+            set_time_bank_start_date("2026-11-02", path=db)
             set_day_type("2026-11-02", "75", path=db)
             set_day_type("2026-11-03", "75", path=db)
             self.assertEqual(day_balance(db)["balance"], 1.0)
