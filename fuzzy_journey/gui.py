@@ -293,7 +293,7 @@ class MainWindow(Adw.ApplicationWindow):
             ("alarms", "Alarms", "alarm-symbolic"),
             ("calendar", "Calendar & time bank", "x-office-calendar-symbolic"),
             ("schedule", "Daily schedule", "view-list-symbolic"),
-            ("prayers", "Prayer times", "weather-clear-symbolic"),
+            ("prayers", "Prayer times", "appointment-soon-symbolic"),
             ("settings", "Settings", "preferences-system-symbolic"),
         )
         for key, title, icon_name in nav_items:
@@ -1089,14 +1089,14 @@ class MainWindow(Adw.ApplicationWindow):
         outer.set_margin_start(5)
         outer.set_margin_end(5)
 
-        time_text = label(alarm["alarm_time"], "time-label")
+        time_text = label(alarm["alarm_time"][:5], "time-label")
         time_text.set_width_chars(5)
         outer.append(time_text)
 
         text_stack = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         text_stack.set_hexpand(True)
         text_stack.append(label(alarm["title"], "alarm-title"))
-        text_stack.append(label(format_repeat(alarm), "alarm-meta"))
+        text_stack.append(label(f"{format_repeat(alarm)} · {SOUND_PRESETS.get(alarm.get('sound_key', 'classic'), 'Classic')}", "alarm-meta"))
         outer.append(text_stack)
 
         if alarm.get("sound_enabled"):
