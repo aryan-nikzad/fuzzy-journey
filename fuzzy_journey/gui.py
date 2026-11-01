@@ -891,6 +891,25 @@ class MainWindow(Adw.ApplicationWindow):
         page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=15)
         page.add_css_class("main-content")
 
+        test_card = make_card()
+        test_card.append(label("Test an alarm", "section-title"))
+        test_card.append(label("Schedule a real one-time alarm in one or two minutes. Lock the screen to test delivery; do not suspend the computer.", "muted", wrap=True))
+        test_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        self.test_delay_dropdown = Gtk.DropDown.new_from_strings(["1 minute", "2 minutes"])
+        test_row.append(self.test_delay_dropdown)
+        self.test_sound_dropdown = Gtk.DropDown.new_from_strings(list(SOUND_LABELS))
+        test_row.append(self.test_sound_dropdown)
+        test_card.append(test_row)
+        test_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        test_button = Gtk.Button(label="Schedule test alarm")
+        test_button.add_css_class("suggested-action")
+        test_button.connect("clicked", self._schedule_test_alarm)
+        test_actions.append(test_button)
+        self.test_alarm_status = label("", "field-hint", wrap=True)
+        test_actions.append(self.test_alarm_status)
+        test_card.append(test_actions)
+        page.append(test_card)
+
         local_card = make_card()
         local_card.append(label("Local-first operation", "section-title"))
         local_card.append(label("Your alarm list, preferences and delivery history are stored on this computer. No sign-in, cloud sync, push server or network connection is involved in ringing an alarm.", "muted", wrap=True))
@@ -912,13 +931,19 @@ class MainWindow(Adw.ApplicationWindow):
         page.append(service_card)
 
         data_card = make_card()
-        data_card.append(label("Prayer data", "section-title"))
-        data_card.append(label("Prayer schedules are read from a local CSV. Refreshing is optional; existing data is never replaced unless you explicitly request a refresh.", "muted", wrap=True))
+        data_card.append(label("Advanced · prayer data manager", "section-title"))
+        data_card.append(label("Download a full year of Shahrekord prayer times for offline use. Choose a future year such as 2027; existing files are backed up before a forced refresh.", "muted", wrap=True))
+        self.download_year_entry = Gtk.Entry()
+        self.download_year_entry.set_placeholder_text("Year, e.g. 2027")
+        self.download_year_entry.set_max_length(4)
+        self.download_year_entry.set_text(str(date.today().year))
+        data_card.append(label("Year to download", "field-title"))
+        data_card.append(self.download_year_entry)
         self.refresh_status = label("", "field-hint", wrap=True)
         data_card.append(self.refresh_status)
-        refresh = Gtk.Button(label="Refresh prayer data from AlAdhan")
+        refresh = Gtk.Button(label="Download / refresh selected year")
         refresh.add_css_class("suggested-action")
-        refresh.connect("clicked", self._refresh_prayer_data)
+        refresh.connect("clicked", lambda button: self._refresh_prayer_data(button, self.download_year_entry))
         data_card.append(refresh)
         page.append(data_card)
 
@@ -962,17 +987,23 @@ class MainWindow(Adw.ApplicationWindow):
             self.settings_service_status.set_text("systemd user service is unavailable.")
         self.refresh_all()
 
-    def _refresh_prayer_data(self, button: Gtk.Button) -> None:
+    def _refresh_prayer_data(self, button: Gtk.Button, year_entry: Gtk.Entry | None = None) -> None:
         script = APP_ROOT / "prayer_aio.py"
         if not script.is_file():
             self.refresh_status.set_text("The original prayer-data updater is not present in this installation.")
             return
+        try:
+            year = int(year_entry.get_text().strip()) if year_entry else date.today().year
+            if year < 1900 or year > 2200:
+                raise ValueError
+        except ValueError:
+            self.refresh_status.set_text("Enter a valid year between 1900 and 2200.")
+            return
         button.set_sensitive(False)
-        self.refresh_status.set_text("Refreshing data. Existing files will be backed up first…")
+        self.refresh_status.set_text(f"Downloading the complete {year} calendar. This requires internet access…")
 
         def worker():
             ensure_data_dir()
-            year = date.today().year
             command = [
                 sys.executable, str(script), "--override", "--no-show",
                 "--city", "shahrekord", "--year", str(year),
@@ -980,25 +1011,40 @@ class MainWindow(Adw.ApplicationWindow):
             ]
             try:
                 result = subprocess.run(
-                    command, cwd=APP_DATA_DIR, capture_output=True, text=True, timeout=240, check=False
+                    command, cwd=APP_DATA_DIR, capture_output=True, text=True, timeout=360, check=False
                 )
                 ok = result.returncode == 0
-                message = "Prayer data refreshed and backed up." if ok else (
-                    result.stderr.strip()[-500:] or result.stdout.strip()[-500:] or "Refresh failed. Check the connection and try again."
+                message = f"{year} prayer data downloaded and saved for offline use." if ok else (
+                    result.stderr.strip()[-500:] or result.stdout.strip()[-500:] or "Download failed. Check the connection and try again."
                 )
             except (OSError, subprocess.TimeoutExpired) as exc:
                 ok = False
-                message = f"Refresh failed: {exc}"
+                message = f"Download failed: {exc}"
             GLib.idle_add(self._finish_refresh, button, ok, message)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _finish_refresh(self, button: Gtk.Button, ok: bool, message: str) -> bool:
         button.set_sensitive(True)
+        self.refresh_all()
         self.refresh_status.set_text(message)
-        if ok:
-            self.refresh_all()
         return GLib.SOURCE_REMOVE
+
+    def _schedule_test_alarm(self, _button: Gtk.Button) -> None:
+        delay = int(self.test_delay_dropdown.get_selected()) + 1
+        due = datetime.now() + timedelta(minutes=delay)
+        sound = sound_key_from_dropdown(self.test_sound_dropdown)
+        database.save_alarm(
+            title=f"Alarm test · {delay} minute",
+            alarm_time=due.strftime("%H:%M:%S"),
+            days_mask=0,
+            one_shot_date=due.date().isoformat(),
+            sound_enabled=True,
+            sound_key=sound,
+            enabled=True,
+        )
+        self.test_alarm_status.set_text(f"Test scheduled for {due.strftime('%H:%M:%S')} · {SOUND_PRESETS[sound]}. You can lock the screen now.")
+        self.refresh_all()
 
     def _open_alarm_form(self, alarm: dict | None = None) -> None:
         AlarmForm(self, alarm).present()
