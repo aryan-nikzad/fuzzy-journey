@@ -1228,7 +1228,7 @@ class MainWindow(Adw.ApplicationWindow):
         appearance = make_card()
         appearance.append(label("Appearance", "section-title"))
         dark_switch = Gtk.Switch()
-        dark_switch.set_active(True)
+        dark_switch.set_active(database.get_app_setting("theme", "dark") == "dark")
         dark_switch.set_halign(Gtk.Align.START)
         dark_switch.connect("notify::active", self._change_theme)
         appearance.append(dark_switch)
@@ -1240,8 +1240,7 @@ class MainWindow(Adw.ApplicationWindow):
         return self._scroll_page(page)
 
     def _change_theme(self, switch: Gtk.Switch, _pspec) -> None:
-        scheme = Adw.ColorScheme.FORCE_DARK if switch.get_active() else Adw.ColorScheme.DEFAULT
-        Adw.StyleManager.get_default().set_color_scheme(scheme)
+        self._apply_theme(switch.get_active(), persist=True)
 
     def _service_active(self) -> bool:
         try:
