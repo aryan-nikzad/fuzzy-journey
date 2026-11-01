@@ -426,8 +426,11 @@ def build_schedule(
         # ---- wake / bed --------------------------------------------
         for suffix in ("50", "75"):
             out[f"WakeTime_{suffix}"] = raw["Fajr"]
+            block2_start = parse_time(out[f"EveningBlockStart_{suffix}"])
             block2_end = parse_time(out[f"EveningBlockEnd_{suffix}"])
-            bed = max(block2_end, isha)
+            # An empty evening block must not push bedtime to the configured
+            # start boundary. Without overflow, bedtime is simply Isha.
+            bed = max(block2_end, isha) if block2_end > block2_start else isha
             out[f"BedTime_{suffix}"] = bed.strftime("%H:%M")
 
         if today == raw["Date"]:
