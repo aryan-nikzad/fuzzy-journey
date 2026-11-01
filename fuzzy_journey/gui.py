@@ -1471,46 +1471,37 @@ class MainWindow(Adw.ApplicationWindow):
             messages = []
             changed_schedules: list[tuple[Path, Path | None]] = []
             succeeded = True
+            rollback_dir: Path | None = None
             try:
-                with tempfile.TemporaryDirectory(prefix=".evening-start-", dir=APP_DATA_DIR) as temp_dir:
-                    rollback_dir = Path(temp_dir)
-                    for (city, year), source in sorted(raw_sources.items(), key=lambda item: item[0][1]):
-                        local_raw = APP_DATA_DIR / source.name
-                        if source.resolve() != local_raw.resolve():
-                            shutil.copy2(source, local_raw)
+                rollback_dir = Path(tempfile.mkdtemp(prefix=".evening-start-", dir=APP_DATA_DIR))
+                for (city, year), source in sorted(raw_sources.items(), key=lambda item: item[0][1]):
+                    local_raw = APP_DATA_DIR / source.name
+                    if source.resolve() != local_raw.resolve():
+                        shutil.copy2(source, local_raw)
 
-                        schedule_path_local = APP_DATA_DIR / f"{city}_prayer_times_{year}_schedule.csv"
-                        backup_path = None
-                        if schedule_path_local.is_file():
-                            backup_path = rollback_dir / schedule_path_local.name
-                            shutil.copy2(schedule_path_local, backup_path)
-                        changed_schedules.append((schedule_path_local, backup_path))
+                    schedule_path_local = APP_DATA_DIR / f"{city}_prayer_times_{year}_schedule.csv"
+                    backup_path = None
+                    if schedule_path_local.is_file():
+                        backup_path = rollback_dir / schedule_path_local.name
+                        shutil.copy2(schedule_path_local, backup_path)
+                    changed_schedules.append((schedule_path_local, backup_path))
 
-                        command = [
-                            sys.executable, str(script), "--no-show",
-                            "--city", city, "--year", str(year),
-                            "--evening-start", value,
-                        ]
-                        result = subprocess.run(
-                            command, cwd=APP_DATA_DIR, capture_output=True, text=True,
-                            timeout=180, check=False,
+                    command = [
+                        sys.executable, str(script), "--no-show",
+                        "--city", city, "--year", str(year),
+                        "--evening-start", value,
+                    ]
+                    result = subprocess.run(
+                        command, cwd=APP_DATA_DIR, capture_output=True, text=True,
+                        timeout=180, check=False,
+                    )
+                    if result.returncode != 0:
+                        succeeded = False
+                        messages.append(
+                            f"{year}: {result.stderr.strip()[-350:] or result.stdout.strip()[-350:] or 'schedule rebuild failed'}"
                         )
-                        if result.returncode != 0:
-                            succeeded = False
-                            messages.append(
-                                f"{year}: {result.stderr.strip()[-350:] or result.stdout.strip()[-350:] or 'schedule rebuild failed'}"
-                            )
-                            break
-                        messages.append(str(year))
-
-                    if not succeeded:
-                        # All schedule outputs are rolled back together. Raw files
-                        # are never edited by this operation.
-                        for schedule_file, backup_file in reversed(changed_schedules):
-                            if backup_file and backup_file.is_file():
-                                shutil.copy2(backup_file, schedule_file)
-                            else:
-                                schedule_file.unlink(missing_ok=True)
+                        break
+                    messages.append(str(year))
 
                 if succeeded:
                     database.set_app_setting("evening_work_start", value)
@@ -1525,15 +1516,20 @@ class MainWindow(Adw.ApplicationWindow):
                     message = "No schedule changes were kept; previous schedules were restored. " + " · ".join(messages)
             except Exception as exc:
                 succeeded = False
-                for schedule_file, backup_file in reversed(changed_schedules):
-                    try:
-                        if backup_file and backup_file.is_file():
-                            shutil.copy2(backup_file, schedule_file)
-                        else:
-                            schedule_file.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                message = f"Could not apply the evening start. Previous schedules were restored where possible: {exc}"
+                message = f"Could not apply the evening start: {exc}"
+            finally:
+                if not succeeded:
+                    # Roll back every schedule touched by this operation.
+                    for schedule_file, backup_file in reversed(changed_schedules):
+                        try:
+                            if backup_file and backup_file.is_file():
+                                shutil.copy2(backup_file, schedule_file)
+                            else:
+                                schedule_file.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                if rollback_dir and rollback_dir.exists():
+                    shutil.rmtree(rollback_dir, ignore_errors=True)
 
             GLib.idle_add(self._finish_evening_start, button, succeeded, message)
 
