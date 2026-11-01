@@ -165,6 +165,23 @@ class AlarmEngineTests(unittest.TestCase):
             self.assertEqual(stats["balance"], 1.0)
             self.assertEqual(stats["days_off"], 0)
 
+    def test_work_alarms_are_suppressed_on_day_off(self):
+        from fuzzy_journey.database import initialize, save_routine_block, set_day_type
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "off.sqlite3"
+            initialize(db)
+            set_day_type("2026-11-02", "off", path=db)
+            save_routine_block(
+                title="Work", category="work", start_time="08:00", end_time="12:00",
+                days_mask=127, alarm_enabled=True, end_alarm_enabled=True, path=db,
+            )
+            self.assertEqual(
+                fire_due_schedule_events(datetime(2026, 11, 2, 8, 0), db_path=str(db)), []
+            )
+            self.assertEqual(
+                fire_due_schedule_events(datetime(2026, 11, 2, 12, 0), db_path=str(db)), []
+            )
+
     def test_routine_alarm_fires_once_per_day(self):
         from fuzzy_journey.database import initialize, save_routine_block
         with tempfile.TemporaryDirectory() as temp:
