@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -45,12 +46,76 @@ def next_occurrence(alarm: dict[str, Any], now: datetime) -> datetime | None:
     return None
 
 
+def _block_interval(block: dict[str, Any], start_day: date) -> tuple[datetime, datetime]:
+    start = datetime.combine(start_day, time.fromisoformat(block["start_time"]))
+    end = datetime.combine(start_day, time.fromisoformat(block["end_time"]))
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def effective_routine_end(
+    work_block: dict[str, Any],
+    all_blocks: list[dict[str, Any]],
+    work_day: date,
+) -> datetime:
+    """Return the work block's end after pausing for overlapping non-work activities.
+
+    The work block's original elapsed duration is preserved as productive work.
+    Enabled non-work blocks pause the clock; overlapping pauses are merged so
+    the same minute is never counted twice.
+    """
+    start, base_end = _block_interval(work_block, work_day)
+    if str(work_block.get("category", "")).lower() != "work":
+        return base_end
+
+    remaining = base_end - start
+    intervals: list[tuple[datetime, datetime]] = []
+    # Include adjacent start dates so overnight activities are handled too.
+    for block in all_blocks:
+        if block.get("id") == work_block.get("id"):
+            continue
+        if not block.get("enabled", True):
+            continue
+        if str(block.get("category", "")).lower() == "work":
+            continue
+        for offset in range(-1, 5):
+            pause_day = work_day + timedelta(days=offset)
+            if not (int(block.get("days_mask") or 0) & WEEKDAY_BITS[pause_day.weekday()]):
+                continue
+            pause_start, pause_end = _block_interval(block, pause_day)
+            if pause_end > start:
+                intervals.append((pause_start, pause_end))
+
+    intervals.sort(key=lambda item: item[0])
+    merged: list[list[datetime]] = []
+    for pause_start, pause_end in intervals:
+        if not merged or pause_start > merged[-1][1]:
+            merged.append([pause_start, pause_end])
+        elif pause_end > merged[-1][1]:
+            merged[-1][1] = pause_end
+
+    cursor = start
+    for pause_start, pause_end in merged:
+        if pause_end <= cursor:
+            continue
+        if pause_start > cursor:
+            productive = pause_start - cursor
+            if productive >= remaining:
+                return cursor + remaining
+            remaining -= productive
+            cursor = pause_start
+        if pause_start <= cursor < pause_end:
+            cursor = pause_end
+    return cursor + remaining
+
+
 def fire_due_alarms(
     now: datetime | None = None,
     *,
     db_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Claim due alarms exactly once and record their delivery before notifying."""
+    """Claim due reminders exactly once and record delivery before notifying."""
     now = now or datetime.now().astimezone().replace(tzinfo=None)
     path = db_path or str(database.DATABASE_PATH)
     database.initialize(path)
@@ -58,8 +123,6 @@ def fire_due_alarms(
 
     with database.connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
-        # Expire one-time reminders from earlier dates instead of leaving
-        # permanently enabled alarms that can no longer be delivered.
         connection.execute(
             """
             UPDATE alarms SET enabled=0, updated_at=?
@@ -70,7 +133,7 @@ def fire_due_alarms(
         rows = connection.execute(
             """
             SELECT id, title, alarm_time, days_mask, one_shot_date,
-                   sound_enabled, enabled, last_fired_date
+                   sound_enabled, sound_key, enabled, last_fired_date
             FROM alarms WHERE enabled=1
             """
         ).fetchall()
@@ -81,7 +144,7 @@ def fire_due_alarms(
                 continue
 
             one_shot = bool(alarm.get("one_shot_date"))
-            cursor = connection.execute(
+            connection.execute(
                 """
                 UPDATE alarms
                 SET last_fired_date=?,
@@ -98,7 +161,7 @@ def fire_due_alarms(
                     now.date().isoformat(),
                 ),
             )
-            if cursor.rowcount != 1:
+            if connection.total_changes == 0:
                 continue
 
             connection.execute(
@@ -112,14 +175,14 @@ def fire_due_alarms(
 
 
 def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None = None) -> list[dict[str, Any]]:
-    """Resolve prayer and routine alarms from local data and claim each event once."""
-    import csv
+    """Resolve prayer and routine start/end alarms from local data, once per scheduled day."""
     from .paths import schedule_path
 
     now = now or datetime.now().astimezone().replace(tzinfo=None)
     path = db_path or str(database.DATABASE_PATH)
     database.initialize(path)
-    events: list[dict[str, Any]] = []
+    candidates: list[tuple[str, str, datetime, bool, str, str]] = []
+
     schedule_file = schedule_path(now.year)
     prayer_times: dict[str, str] = {}
     if schedule_file and schedule_file.is_file():
@@ -133,36 +196,60 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
                     prayer_times = row
                     break
 
-    candidates: list[tuple[str, str, str, bool]] = []
-    prayer_settings = database.list_prayer_alarms(path)
-    for key, settings in prayer_settings.items():
+    for key, settings in database.list_prayer_alarms(path).items():
         if not settings.get("enabled") or not prayer_times.get(key):
             continue
         try:
-            base = datetime.combine(now.date(), time.fromisoformat(prayer_times[key]))
+            due = datetime.combine(now.date(), time.fromisoformat(prayer_times[key]))
+            due += timedelta(minutes=int(settings.get("offset_minutes") or 0))
         except ValueError:
             continue
-        due = base + timedelta(minutes=int(settings.get("offset_minutes") or 0))
-        candidates.append((f"prayer:{key}", f"{key} prayer", due.strftime("%H:%M"), bool(settings.get("sound_enabled", 1))))
+        candidates.append((
+            f"prayer:{key}", f"{key} prayer", due,
+            bool(settings.get("sound_enabled", 1)),
+            str(settings.get("sound_key") or "classic"), now.date().isoformat(),
+        ))
 
-    for block in database.list_routine_blocks(path):
-        if not block.get("enabled") or not block.get("alarm_enabled"):
+    blocks = database.list_routine_blocks(path)
+    for block in blocks:
+        if not block.get("enabled"):
             continue
-        if not (int(block.get("days_mask") or 0) & WEEKDAY_BITS[now.weekday()]):
-            continue
-        candidates.append((f"routine:{block['id']}", block["title"], block["start_time"], bool(block["sound_enabled"])))
+        # Previous start day is included for blocks that end after midnight.
+        for offset in (-1, 0):
+            start_day = now.date() + timedelta(days=offset)
+            if not (int(block.get("days_mask") or 0) & WEEKDAY_BITS[start_day.weekday()]):
+                continue
+            start_due, base_end = _block_interval(block, start_day)
+            sound_enabled = bool(block.get("sound_enabled", 1))
+            sound_key = str(block.get("sound_key") or "classic")
+            event_day = start_day.isoformat()
+            if offset == 0 and block.get("alarm_enabled"):
+                candidates.append((
+                    f"routine:{block['id']}:start", block["title"], start_due,
+                    sound_enabled, sound_key, event_day,
+                ))
+            if block.get("end_alarm_enabled"):
+                end_due = (
+                    effective_routine_end(block, blocks, start_day)
+                    if str(block.get("category", "")).lower() == "work"
+                    else base_end
+                )
+                candidates.append((
+                    f"routine:{block['id']}:end", f"{block['title']} finished", end_due,
+                    sound_enabled, sound_key, event_day,
+                ))
 
+    fired: list[dict[str, Any]] = []
     with database.connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
-        for event_key, title, clock, sound in candidates:
-            due = datetime.combine(now.date(), time.fromisoformat(clock))
+        for event_key, title, due, sound_enabled, sound_key, event_day in candidates:
             elapsed = now - due
             if elapsed < timedelta(0) or elapsed > MISSED_ALARM_GRACE:
                 continue
             try:
                 connection.execute(
                     "INSERT INTO schedule_event_fires(event_key, event_date, fired_at) VALUES (?, ?, ?)",
-                    (event_key, now.date().isoformat(), now.isoformat(timespec="seconds")),
+                    (event_key, event_day, now.isoformat(timespec="seconds")),
                 )
             except Exception as exc:
                 if "UNIQUE" in str(exc).upper():
@@ -172,5 +259,11 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
                 "INSERT INTO alarm_events(alarm_id, title, fired_at) VALUES (NULL, ?, ?)",
                 (title, now.isoformat(timespec="seconds")),
             )
-            events.append({"id": event_key, "title": title, "alarm_time": clock, "sound_enabled": sound})
-    return events
+            fired.append({
+                "id": event_key,
+                "title": title,
+                "alarm_time": due.strftime("%H:%M:%S" if due.second else "%H:%M"),
+                "sound_enabled": sound_enabled,
+                "sound_key": sound_key,
+            })
+    return fired
