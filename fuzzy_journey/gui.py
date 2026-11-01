@@ -610,6 +610,27 @@ class MainWindow(Adw.ApplicationWindow):
         balance.append(stats)
         page.append(balance)
 
+        tracking = make_card()
+        tracking.append(label("Start tracking from", "section-title"))
+        tracking.append(label("Choose the date you want the time bank to begin. Anything before this date is ignored, so your starting balance is zero.", "muted", wrap=True))
+        self.time_bank_start_entry = Gtk.Entry()
+        self.time_bank_start_entry.set_placeholder_text("YYYY-MM-DD")
+        self.time_bank_start_entry.set_text(database.get_time_bank_start_date())
+        tracking.append(self.time_bank_start_entry)
+        tracking_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        apply_start = Gtk.Button(label="Set start date")
+        apply_start.add_css_class("suggested-action")
+        apply_start.connect("clicked", self._apply_time_bank_start_date)
+        tracking_actions.append(apply_start)
+        reset_start = Gtk.Button(label="Reset to today")
+        reset_start.add_css_class("flat")
+        reset_start.connect("clicked", lambda _b: (self.time_bank_start_entry.set_text(date.today().isoformat()), self._apply_time_bank_start_date(None)))
+        tracking_actions.append(reset_start)
+        tracking.append(tracking_actions)
+        self.time_bank_start_status = label("", "field-hint", wrap=True)
+        tracking.append(self.time_bank_start_status)
+        page.append(tracking)
+
         month_card = make_card()
         controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
         prev = Gtk.Button.new_from_icon_name("go-previous-symbolic")
@@ -667,6 +688,17 @@ class MainWindow(Adw.ApplicationWindow):
         self.day_notes.set_text(saved["notes"] if saved else "")
         self._render_calendar()
 
+    def _apply_time_bank_start_date(self, _button: Gtk.Button | None) -> None:
+        value = self.time_bank_start_entry.get_text().strip()
+        try:
+            date.fromisoformat(value)
+        except ValueError:
+            self.time_bank_start_status.set_text("Enter a valid start date in YYYY-MM-DD format.")
+            return
+        database.set_time_bank_start_date(value)
+        self.time_bank_start_status.set_text(f"Time bank now starts on {value}. Earlier entries are ignored.")
+        self.refresh_calendar()
+
     def _save_selected_day(self, _button: Gtk.Button) -> None:
         kind = {0: "50", 1: "75", 2: "off"}.get(self.day_type_dropdown.get_selected(), "50")
         database.set_day_type(self.calendar_selected_date.isoformat(), kind, self.day_notes.get_text().strip())
@@ -695,11 +727,13 @@ class MainWindow(Adw.ApplicationWindow):
                     text_value = " "
                 else:
                     entry = entries.get(day.isoformat())
-                    suffix = {"50": " · 50", "75": " · 75", "off": " · OFF"}.get(entry["day_type"], "") if entry else ""
+                    suffix = {"50": " · 50", "75": " · 75", "off": " · OFF"}.get(entry["day_type"], "") if entry else " · 50"
                     text_value = f"{day.day}{suffix}"
                 button = Gtk.Button(label=text_value)
                 button.set_sensitive(day.month == self.calendar_month.month)
                 button.set_size_request(68, 42)
+                if day.month == self.calendar_month.month and not entries.get(day.isoformat()):
+                    button.set_tooltip_text("Default day: 50% (you can change this later).")
                 if day == self.calendar_selected_date:
                     button.add_css_class("suggested-action")
                 elif entries.get(day.isoformat(), {}).get("day_type") == "75":
@@ -715,10 +749,12 @@ class MainWindow(Adw.ApplicationWindow):
         stats = database.day_balance()
         balance = stats["balance"]
         self.balance_value.set_text(f"{balance:+g} days" if balance else "0 days")
-        self.balance_detail.set_text("Each 75% day earns half a day. Each day off spends one day. Negative balance means time owed.")
+        self.balance_detail.set_text(f"Each 75% day earns half a day; each day off spends one. Tracking starts {stats['start_date']}. Negative balance is allowed.")
         self.balance_earned.set_text(f"Earned: {stats['earned']:g}")
         self.balance_used.set_text(f"Used: {stats['consumed']:g}")
         self.balance_debt.set_text(f"Debt: {max(0, -balance):g}")
+        if hasattr(self, "time_bank_start_entry"):
+            self.time_bank_start_entry.set_text(stats["start_date"])
         self._render_calendar()
 
     def _build_schedule(self) -> Gtk.Widget:
