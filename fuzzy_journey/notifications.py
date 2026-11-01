@@ -16,7 +16,6 @@ SOUND_PRESETS = {
     "digital": "Digital",
 }
 
-# Each preset is a short sequence of tones (frequency Hz, duration seconds).
 MELODIES = {
     "classic": [(880, 0.42), (0, 0.16), (1175, 0.42), (0, 0.16), (880, 0.42), (0, 0.16), (1175, 0.75)],
     "gentle": [(523, 0.45), (659, 0.45), (784, 0.70), (0, 0.15), (659, 0.7)],
@@ -31,7 +30,7 @@ def sound_path(sound_key: str = "classic") -> Path:
 
 
 def ensure_alarm_sound(sound_key: str = "classic") -> Path:
-    """Create a local, self-contained sound preset using only the standard library."""
+    """Create a local sound preset with the standard library."""
     ensure_data_dir()
     path = sound_path(sound_key)
     if path.is_file():
@@ -67,33 +66,60 @@ def send_notification(title: str, message: str) -> None:
         subprocess.run(
             [command, "--app-name=Fuzzy Journey", "--urgency=critical",
              "--expire-time=15000", title, message],
-            check=False,
-            timeout=5,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            check=False, timeout=5,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.TimeoutExpired):
         pass
 
 
-def play_alarm_sound(sound_key: str = "classic") -> None:
-    sound_file = ensure_alarm_sound(sound_key)
-    player = next((shutil.which(name) for name in ("paplay", "pw-play", "aplay") if shutil.which(name)), None)
-    if not player:
-        return
+def _audio_command(path: Path) -> list[str] | None:
+    """Choose a player that can decode common compressed audio formats."""
+    for name in ("mpv", "ffplay", "mpg123", "cvlc"):
+        executable = shutil.which(name)
+        if not executable:
+            continue
+        if name == "mpv":
+            return [executable, "--no-video", "--really-quiet", str(path)]
+        if name == "ffplay":
+            return [executable, "-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]
+        if name == "mpg123":
+            return [executable, "-q", str(path)]
+        return [executable, "--play-and-exit", "--quiet", str(path)]
+
+    # The simple desktop audio players are reliable for generated / standard WAV tones.
+    if path.suffix.lower() in {".wav", ".wave"}:
+        for name in ("paplay", "pw-play", "aplay"):
+            executable = shutil.which(name)
+            if executable:
+                return [executable, str(path)]
+    return None
+
+
+def play_alarm_sound(sound_key: str = "classic", custom_sound_path: str | None = None) -> bool:
+    """Play a selected preset or a user-selected audio file."""
+    if custom_sound_path:
+        sound_file = Path(custom_sound_path).expanduser()
+        if not sound_file.is_file():
+            sound_file = ensure_alarm_sound(sound_key)
+    else:
+        sound_file = ensure_alarm_sound(sound_key)
+
+    command = _audio_command(sound_file)
+    if not command:
+        return False
     try:
         subprocess.Popen(
-            [player, str(sound_file)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        return True
     except OSError:
-        pass
+        return False
 
 
 def deliver_alarm(alarm: dict) -> None:
     title = alarm.get("title") or "Reminder"
     send_notification(f"Fuzzy Journey · {title}", f"It's {alarm['alarm_time']}. Your reminder is due.")
     if alarm.get("sound_enabled", True):
-        play_alarm_sound(alarm.get("sound_key", "classic"))
+        play_alarm_sound(alarm.get("sound_key", "classic"), alarm.get("custom_sound_path"))
