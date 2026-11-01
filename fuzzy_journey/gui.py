@@ -228,6 +228,23 @@ class AlarmForm(Gtk.Window):
         self.sound_dropdown.set_selected(SOUND_KEYS.index(selected_sound) if selected_sound in SOUND_KEYS else 0)
         root.append(self.sound_dropdown)
 
+        self.custom_sound_path = alarm.get("custom_sound_path") if alarm else None
+        custom_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        choose_custom = Gtk.Button(label="Choose MP3 / audio file")
+        choose_custom.add_css_class("flat")
+        choose_custom.connect("clicked", lambda _b: choose_audio_file(self, self._custom_sound_selected))
+        custom_row.append(choose_custom)
+        clear_custom = Gtk.Button(label="Use built-in tone")
+        clear_custom.add_css_class("flat")
+        clear_custom.connect("clicked", self._clear_custom_sound)
+        custom_row.append(clear_custom)
+        root.append(custom_row)
+        self.custom_sound_status = label(
+            Path(self.custom_sound_path).name if self.custom_sound_path else "Using the selected built-in tone.",
+            "field-hint", wrap=True,
+        )
+        root.append(self.custom_sound_status)
+
         self.enabled_check = Gtk.CheckButton(label="Keep this reminder enabled")
         self.enabled_check.set_active(bool(alarm["enabled"]) if alarm else True)
         root.append(self.enabled_check)
@@ -253,9 +270,20 @@ class AlarmForm(Gtk.Window):
         actions.append(save)
         root.append(actions)
 
+    def _custom_sound_selected(self, path: str | None, error: str | None) -> None:
+        if error:
+            self.custom_sound_status.set_text(error)
+            return
+        self.custom_sound_path = path
+        self.custom_sound_status.set_text(f"Custom sound: {Path(path).name}" if path else "Using the selected built-in tone.")
+
+    def _clear_custom_sound(self, _button: Gtk.Button) -> None:
+        self.custom_sound_path = None
+        self.custom_sound_status.set_text("Using the selected built-in tone.")
+
     def _test_sound(self, _button: Gtk.Button) -> None:
         selected_sound = sound_key_from_dropdown(self.sound_dropdown)
-        threading.Thread(target=play_alarm_sound, args=(selected_sound,), daemon=True).start()
+        threading.Thread(target=play_alarm_sound, args=(selected_sound, self.custom_sound_path), daemon=True).start()
 
     def _save(self, _button: Gtk.Button) -> None:
         title = self.title_entry.get_text().strip() or "Reminder"
@@ -288,6 +316,7 @@ class AlarmForm(Gtk.Window):
                 one_shot_date=one_shot or None,
                 sound_enabled=self.sound_check.get_active(),
                 sound_key=sound_key_from_dropdown(self.sound_dropdown),
+                custom_sound_path=self.custom_sound_path,
                 enabled=self.enabled_check.get_active(),
                 alarm_id=self.alarm["id"] if self.alarm else None,
             )
