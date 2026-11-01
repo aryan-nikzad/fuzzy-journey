@@ -32,19 +32,25 @@ exec /usr/bin/python3 -m fuzzy_journey.gui "\$@"
 EOF
 chmod +x "$BIN_DIR/fuzzy-journey"
 
-cat > "$DESKTOP_DIR/fuzzy-journey.desktop" <<EOF
+DESKTOP_FILE="$DESKTOP_DIR/org.anyatech.FuzzyJourney.desktop"
+rm -f "$DESKTOP_DIR/fuzzy-journey.desktop"
+cat > "$DESKTOP_FILE" <<EOF
 [Desktop Entry]
 Version=1.0
 Type=Application
 Name=Fuzzy Journey
 Comment=Your day, shaped around prayer and focused work
 Exec=$BIN_DIR/fuzzy-journey
+TryExec=$BIN_DIR/fuzzy-journey
 Icon=$APP_DIR/assets/fuzzy-journey.svg
 Terminal=false
 Categories=Office;Utility;Calendar;
 StartupNotify=true
-StartupWMClass=fuzzy-journey
+StartupWMClass=org.anyatech.FuzzyJourney
 EOF
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+fi
 
 cat > "$SERVICE_DIR/fuzzy-journey.service" <<EOF
 [Unit]
