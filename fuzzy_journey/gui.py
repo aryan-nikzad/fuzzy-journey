@@ -1178,6 +1178,19 @@ class MainWindow(Adw.ApplicationWindow):
         self.test_sound_dropdown = Gtk.DropDown.new_from_strings(list(SOUND_LABELS))
         test_row.append(self.test_sound_dropdown)
         test_card.append(test_row)
+        self.test_custom_sound_path = None
+        test_sound_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        choose_test_sound = Gtk.Button(label="Choose MP3 / audio")
+        choose_test_sound.add_css_class("flat")
+        self.test_custom_sound_status = label("Built-in test tone", "field-hint")
+        choose_test_sound.connect("clicked", lambda _b: choose_audio_file(self, self._test_custom_sound_selected))
+        test_sound_actions.append(choose_test_sound)
+        clear_test_sound = Gtk.Button(label="Use built-in")
+        clear_test_sound.add_css_class("flat")
+        clear_test_sound.connect("clicked", lambda _b: self._test_custom_sound_selected(None, None))
+        test_sound_actions.append(clear_test_sound)
+        test_sound_actions.append(self.test_custom_sound_status)
+        test_card.append(test_sound_actions)
         test_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         test_button = Gtk.Button(label="Schedule test alarm")
         test_button.add_css_class("suggested-action")
@@ -1311,6 +1324,13 @@ class MainWindow(Adw.ApplicationWindow):
         status_widget.set_text(message)
         return GLib.SOURCE_REMOVE
 
+    def _test_custom_sound_selected(self, path: str | None, error: str | None) -> None:
+        if error:
+            self.test_custom_sound_status.set_text(error)
+            return
+        self.test_custom_sound_path = path
+        self.test_custom_sound_status.set_text(Path(path).name if path else "Built-in test tone")
+
     def _schedule_test_alarm(self, _button: Gtk.Button) -> None:
         delay = int(self.test_delay_dropdown.get_selected()) + 1
         due = datetime.now() + timedelta(minutes=delay)
@@ -1322,6 +1342,7 @@ class MainWindow(Adw.ApplicationWindow):
             one_shot_date=due.date().isoformat(),
             sound_enabled=True,
             sound_key=sound,
+            custom_sound_path=self.test_custom_sound_path,
             enabled=True,
         )
         self.test_alarm_status.set_text(f"Test scheduled for {due.strftime('%H:%M:%S')} · {SOUND_PRESETS[sound]}. You can lock the screen now.")
