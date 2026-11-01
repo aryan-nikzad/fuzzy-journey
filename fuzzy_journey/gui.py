@@ -1860,9 +1860,26 @@ class MainWindow(Adw.ApplicationWindow):
                 ("Morning work", f"MorningBlockStart_{plan_key}", f"MorningBlockEnd_{plan_key}"),
                 ("Evening work", f"EveningBlockStart_{plan_key}", f"EveningBlockEnd_{plan_key}"),
             ):
-                start_value = str(today_row.get(start_field) or "").strip()
-                end_value = str(today_row.get(end_field) or "").strip()
-                interval = schedule_range(today_date, start_value, end_value)
+                if block_name == "Evening work":
+                    overflow = str(today_row.get(f"WorkOverflow_{plan_key}") or "00:00").strip()
+                    try:
+                        hours, minutes = (int(part) for part in overflow.split(":"))
+                        work_duration = timedelta(hours=hours, minutes=minutes)
+                        evening_start_value = database.get_app_setting("evening_work_start", "18:00") or "18:00"
+                        evening_start_clock = datetime.strptime(evening_start_value, "%H:%M").time()
+                    except (ValueError, TypeError):
+                        continue
+                    if work_duration <= timedelta(0):
+                        continue
+                    start_moment = datetime.combine(today_date, evening_start_clock)
+                    end_moment = start_moment + work_duration
+                    start_value = start_moment.strftime("%H:%M")
+                    end_value = end_moment.strftime("%H:%M")
+                    interval = (start_moment, end_moment)
+                else:
+                    start_value = str(today_row.get(start_field) or "").strip()
+                    end_value = str(today_row.get(end_field) or "").strip()
+                    interval = schedule_range(today_date, start_value, end_value)
                 if not interval:
                     continue
                 synthetic = {
@@ -2008,6 +2025,32 @@ class MainWindow(Adw.ApplicationWindow):
             today_row.get(f"BedTime_{plan_key}") if today_row else None
         )
         sleep_duration = today_row.get(f"SleepDuration_{plan_key}") if today_row else None
+        if today_row and not sleep_block:
+            try:
+                overflow = str(today_row.get(f"WorkOverflow_{plan_key}") or "00:00")
+                hours, minutes = (int(part) for part in overflow.split(":"))
+                evening_duration = timedelta(hours=hours, minutes=minutes)
+                evening_start_value = database.get_app_setting("evening_work_start", "18:00") or "18:00"
+                evening_start_clock = datetime.strptime(evening_start_value, "%H:%M").time()
+                isha_clock = datetime.strptime(today_row["Isha"], "%H:%M").time()
+                isha_moment = datetime.combine(today_date, isha_clock)
+                if evening_duration > timedelta(0):
+                    evening_end = datetime.combine(today_date, evening_start_clock) + evening_duration
+                    bed_moment = max(isha_moment, evening_end)
+                else:
+                    bed_moment = isha_moment
+                bed_time = bed_moment.strftime("%H:%M")
+                # Recalculate sleep duration relative to the next Fajr instead
+                # of retaining a stale bedtime from the original 18:00 schedule.
+                base_sleep = today_row.get("IshaToNextFajrDuration", "00:00")
+                base_hours, base_minutes = (int(part) for part in base_sleep.split(":"))
+                sleep_delta = timedelta(hours=base_hours, minutes=base_minutes)
+                delayed_bed = max(timedelta(0), bed_moment - isha_moment)
+                actual_sleep = max(timedelta(0), sleep_delta - delayed_bed)
+                sleep_hours, sleep_minutes = divmod(int(actual_sleep.total_seconds() // 60), 60)
+                sleep_duration = f"{sleep_hours:02d}:{sleep_minutes:02d}"
+            except (ValueError, TypeError, KeyError):
+                pass
         if sleep_block:
             sleep_interval = schedule_range(today_date, sleep_block.get("start_time"), sleep_block.get("end_time"))
             if sleep_interval:
