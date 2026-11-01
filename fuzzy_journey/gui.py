@@ -395,12 +395,7 @@ class MainWindow(Adw.ApplicationWindow):
         spacer = Gtk.Box()
         spacer.set_vexpand(True)
         sidebar.append(spacer)
-        offline = make_card()
-        offline.set_margin_start(0)
-        offline.set_margin_end(0)
-        offline.append(label("LOCAL BY DESIGN", "eyebrow"))
-        offline.append(label("Your reminders and saved schedules stay on this computer. No account or connection required.", "muted", wrap=True))
-        sidebar.append(offline)
+        sidebar.append(label("OFFLINE  ·  LOCAL DATA", "version-label"))
         sidebar.append(label("FUZZY JOURNEY  ·  1.0", "version-label"))
 
         main = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -427,7 +422,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.stack = Gtk.Stack()
         self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-        self.stack.set_transition_duration(160)
+        self.stack.set_transition_duration(210)
         self.stack.set_vexpand(True)
         main.append(self.stack)
 
@@ -785,7 +780,11 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.prayer_table = Gtk.ListBox()
         self.prayer_table.set_selection_mode(Gtk.SelectionMode.NONE)
-        page.append(self.prayer_table)
+        prayer_scroller = Gtk.ScrolledWindow()
+        prayer_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
+        prayer_scroller.set_min_content_width(850)
+        prayer_scroller.set_child(self.prayer_table)
+        page.append(prayer_scroller)
         self.prayer_page_note = label("", "muted", wrap=True)
         page.append(self.prayer_page_note)
         return self._scroll_page(page)
@@ -1556,6 +1555,7 @@ class MainWindow(Adw.ApplicationWindow):
             line_box.set_margin_bottom(8)
             line_box.set_margin_start(12)
             line_box.set_margin_end(12)
+            line_box.set_size_request(850, -1)
             date_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
             date_box.set_size_request(112, -1)
             date_box.append(label(row_date.strftime("%a, %d %b"), "alarm-title"))
