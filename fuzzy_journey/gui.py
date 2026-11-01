@@ -774,14 +774,15 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _open_routine_form(self, _button=None, block: dict | None = None) -> None:
         dialog = Gtk.Window(transient_for=self, modal=True, title="Edit time block" if block else "Add time block")
-        dialog.set_default_size(420, 520)
+        dialog.set_default_size(440, 610)
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
         box.set_margin_top(20); box.set_margin_bottom(20); box.set_margin_start(22); box.set_margin_end(22)
         box.append(label("Activity name", "field-title"))
-        title = Gtk.Entry(); title.set_placeholder_text("e.g. Girlfriend call"); title.set_text(block["title"] if block else ""); box.append(title)
+        title = Gtk.Entry(); title.set_placeholder_text("e.g. Focused work"); title.set_text(block["title"] if block else ""); box.append(title)
         box.append(label("Category", "field-title"))
+        categories = ["personal", "work", "sleep", "wake", "call", "prayer", "health"]
         category = Gtk.DropDown.new_from_strings(["Personal", "Work", "Sleep", "Wake-up", "Call", "Prayer", "Health"])
-        category.set_selected(["personal","work","sleep","wake","call","prayer","health"].index(block["category"]) if block and block["category"] in ["personal","work","sleep","wake","call","prayer","health"] else 0)
+        category.set_selected(categories.index(block["category"]) if block and block["category"] in categories else 0)
         box.append(category)
         box.append(label("Start time · HH:MM", "field-title"))
         start = Gtk.Entry(); start.set_text(block["start_time"] if block else "16:00"); box.append(start)
@@ -794,24 +795,47 @@ class MainWindow(Adw.ApplicationWindow):
         for index, day in enumerate(WEEKDAYS):
             check = Gtk.CheckButton(label=day); check.set_active(bool(old_mask & (1 << index))); checks.append(check); day_row.append(check)
         box.append(day_row)
-        alarm = Gtk.CheckButton(label="Ring at the start of this block"); alarm.set_active(bool(block["alarm_enabled"]) if block else False); box.append(alarm)
-        sound = Gtk.CheckButton(label="Play sound"); sound.set_active(bool(block["sound_enabled"]) if block else True); box.append(sound)
-        enabled = Gtk.CheckButton(label="Block enabled"); enabled.set_active(bool(block["enabled"]) if block else True); box.append(enabled)
+        alarm = Gtk.CheckButton(label="Alarm when this block starts")
+        alarm.set_active(bool(block["alarm_enabled"]) if block else False); box.append(alarm)
+        end_alarm = Gtk.CheckButton(label="Alarm when this block ends")
+        end_alarm.set_active(bool(block.get("end_alarm_enabled", 0)) if block else False); box.append(end_alarm)
+        sound = Gtk.CheckButton(label="Play sound")
+        sound.set_active(bool(block["sound_enabled"]) if block else True); box.append(sound)
+        box.append(label("Alarm sound", "field-title"))
+        sound_dropdown = Gtk.DropDown.new_from_strings(list(SOUND_LABELS))
+        old_sound = block.get("sound_key", "classic") if block else "classic"
+        sound_dropdown.set_selected(SOUND_KEYS.index(old_sound) if old_sound in SOUND_KEYS else 0)
+        box.append(sound_dropdown)
+        enabled = Gtk.CheckButton(label="Block enabled")
+        enabled.set_active(bool(block["enabled"]) if block else True); box.append(enabled)
         status = label("", "error-text", wrap=True); box.append(status)
         actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8); actions.set_halign(Gtk.Align.END)
         cancel = Gtk.Button(label="Cancel"); cancel.connect("clicked", lambda _b: dialog.close()); actions.append(cancel)
         save = Gtk.Button(label="Save block"); save.add_css_class("suggested-action")
         def save_block(_b):
             mask = sum(1 << i for i, item in enumerate(checks) if item.get_active())
-            try:
-                database.save_routine_block(title=title.get_text(), category=["personal","work","sleep","wake","call","prayer","health"][category.get_selected()],
-                    start_time=start.get_text().strip(), end_time=end.get_text().strip(), days_mask=mask,
-                    alarm_enabled=alarm.get_active(), sound_enabled=sound.get_active(), enabled=enabled.get_active(),
-                    block_id=block["id"] if block else None)
-            except ValueError:
-                status.set_text("Enter valid 24-hour times and select at least one day.")
+            if mask == 0:
+                status.set_text("Choose at least one day for this block.")
                 return
-            dialog.close(); self.refresh_schedule()
+            try:
+                database.save_routine_block(
+                    title=title.get_text(),
+                    category=categories[category.get_selected()],
+                    start_time=start.get_text().strip(),
+                    end_time=end.get_text().strip(),
+                    days_mask=mask,
+                    alarm_enabled=alarm.get_active(),
+                    end_alarm_enabled=end_alarm.get_active(),
+                    sound_enabled=sound.get_active(),
+                    sound_key=sound_key_from_dropdown(sound_dropdown),
+                    enabled=enabled.get_active(),
+                    block_id=block["id"] if block else None,
+                )
+            except ValueError:
+                status.set_text("Enter valid 24-hour start and end times.")
+                return
+            dialog.close()
+            self.refresh_all()
         save.connect("clicked", save_block); actions.append(save); box.append(actions)
         dialog.set_child(box); dialog.present()
 
@@ -824,13 +848,22 @@ class MainWindow(Adw.ApplicationWindow):
         blocks = database.list_routine_blocks()
         if not blocks:
             self.routine_list.append(label("No custom time blocks yet.", "muted"))
+        today = date.today()
         for block in blocks:
             row = make_card()
             heading = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
             heading.append(label(block["start_time"], "time-label"))
             title_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2); title_box.set_hexpand(True)
             title_box.append(label(block["title"], "alarm-title"))
-            title_box.append(label(f"{block['category'].title()} · until {block['end_time']} · {format_repeat(block)}", "alarm-meta"))
+            display_end = block["end_time"]
+            end_note = ""
+            is_scheduled_today = bool(int(block.get("days_mask") or 0) & (1 << today.weekday()))
+            if is_scheduled_today and block["category"] == "work" and block["enabled"]:
+                adjusted_end = effective_routine_end(block, blocks, today)
+                display_end = adjusted_end.strftime("%H:%M")
+                if display_end != block["end_time"]:
+                    end_note = " · extended around other activities"
+            title_box.append(label(f"{block['category'].title()} · until {display_end}{end_note} · {format_repeat(block)}", "alarm-meta"))
             heading.append(title_box)
             edit = Gtk.Button.new_from_icon_name("document-edit-symbolic")
             edit.add_css_class("flat")
@@ -840,13 +873,18 @@ class MainWindow(Adw.ApplicationWindow):
             delete = Gtk.Button.new_from_icon_name("user-trash-symbolic")
             delete.add_css_class("flat")
             delete.set_tooltip_text("Delete time block")
-            delete.connect("clicked", lambda _b, bid=block["id"]: (database.delete_routine_block(bid), self.refresh_schedule()))
+            delete.connect("clicked", lambda _b, bid=block["id"]: (database.delete_routine_block(bid), self.refresh_all()))
             heading.append(delete)
             switch = Gtk.Switch(); switch.set_active(bool(block["enabled"])); switch.set_valign(Gtk.Align.CENTER)
-            switch.connect("notify::active", lambda sw, _p, bid=block["id"]: (database.set_routine_enabled(bid, sw.get_active()), self.refresh_schedule()))
+            switch.connect("notify::active", lambda sw, _p, bid=block["id"]: (database.set_routine_enabled(bid, sw.get_active()), self.refresh_all()))
             heading.append(switch)
             row.append(heading)
-            row.append(label("Start alarm enabled" if block["alarm_enabled"] else "No start alarm", "field-hint"))
+            flags = []
+            if block.get("alarm_enabled"):
+                flags.append("start alarm")
+            if block.get("end_alarm_enabled"):
+                flags.append("end alarm")
+            row.append(label((" · ".join(flags) if flags else "No alarms") + f" · Sound: {SOUND_PRESETS.get(block.get('sound_key', 'classic'), 'Classic')}", "field-hint"))
             self.routine_list.append(row)
 
     def _build_settings(self) -> Gtk.Widget:
