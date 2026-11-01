@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -114,6 +117,56 @@ def duration_text(value: str) -> str:
         return f"{hours}h {minutes:02d}m" if minutes else f"{hours}h"
     except (ValueError, AttributeError):
         return value or "—"
+
+
+def copy_custom_audio(source_path: str) -> str:
+    source = Path(source_path).expanduser()
+    allowed = {".mp3", ".wav", ".wave", ".ogg", ".flac", ".m4a", ".aac"}
+    if source.suffix.lower() not in allowed or not source.is_file():
+        raise ValueError("Choose a valid MP3, WAV, OGG, FLAC, M4A or AAC audio file.")
+    digest = hashlib.sha256()
+    with source.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", source.stem).strip("-")[:48] or "alarm"
+    destination_dir = APP_DATA_DIR / "custom-sounds"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / f"{digest.hexdigest()[:12]}-{safe_name}{source.suffix.lower()}"
+    if not destination.exists():
+        shutil.copy2(source, destination)
+    return str(destination)
+
+
+def choose_audio_file(parent: Gtk.Window, callback) -> None:
+    dialog = Gtk.FileChooserNative.new(
+        "Choose an alarm sound", parent, Gtk.FileChooserAction.OPEN,
+        "Choose audio", "Cancel",
+    )
+    audio_filter = Gtk.FileFilter()
+    audio_filter.set_name("Audio files")
+    for pattern in ("*.mp3", "*.MP3", "*.wav", "*.WAV", "*.ogg", "*.OGG",
+                    "*.flac", "*.FLAC", "*.m4a", "*.M4A", "*.aac", "*.AAC"):
+        audio_filter.add_pattern(pattern)
+    dialog.add_filter(audio_filter)
+    all_filter = Gtk.FileFilter()
+    all_filter.set_name("All files")
+    all_filter.add_pattern("*")
+    dialog.add_filter(all_filter)
+
+    def response(native_dialog, response_id):
+        if response_id == Gtk.ResponseType.ACCEPT:
+            selected = native_dialog.get_file()
+            try:
+                source = selected.get_path() if selected else None
+                if not source:
+                    raise ValueError("The selected file has no local path.")
+                callback(copy_custom_audio(source), None)
+            except (OSError, ValueError) as exc:
+                callback(None, str(exc))
+        native_dialog.destroy()
+
+    dialog.connect("response", response)
+    dialog.show()
 
 
 class AlarmForm(Gtk.Window):
