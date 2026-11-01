@@ -172,5 +172,5 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
                 "INSERT INTO alarm_events(alarm_id, title, fired_at) VALUES (NULL, ?, ?)",
                 (title, now.isoformat(timespec="seconds")),
             )
-            events.append({"id": event_key, "title": title, "sound_enabled": sound})
+            events.append({"id": event_key, "title": title, "alarm_time": clock, "sound_enabled": sound})
     return events
