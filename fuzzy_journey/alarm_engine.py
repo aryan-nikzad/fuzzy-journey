@@ -54,24 +54,16 @@ def _block_interval(block: dict[str, Any], start_day: date) -> tuple[datetime, d
     return start, end
 
 
-def effective_routine_end(
+def _routine_pause_intervals(
     work_block: dict[str, Any],
     all_blocks: list[dict[str, Any]],
     work_day: date,
-) -> datetime:
-    """Return the work block's end after pausing for overlapping non-work activities.
-
-    The work block's original elapsed duration is preserved as productive work.
-    Enabled non-work blocks pause the clock; overlapping pauses are merged so
-    the same minute is never counted twice.
-    """
+) -> tuple[datetime, datetime, list[tuple[datetime, datetime, str]]]:
     start, base_end = _block_interval(work_block, work_day)
     if str(work_block.get("category", "")).lower() != "work":
-        return base_end
+        return start, base_end, []
 
-    remaining = base_end - start
-    intervals: list[tuple[datetime, datetime]] = []
-    # Include adjacent start dates so overnight activities are handled too.
+    intervals: list[tuple[datetime, datetime, str]] = []
     for block in all_blocks:
         if block.get("id") == work_block.get("id"):
             continue
@@ -85,18 +77,29 @@ def effective_routine_end(
                 continue
             pause_start, pause_end = _block_interval(block, pause_day)
             if pause_end > start:
-                intervals.append((pause_start, pause_end))
+                intervals.append((pause_start, pause_end, str(block.get("title") or "Activity")))
 
     intervals.sort(key=lambda item: item[0])
-    merged: list[list[datetime]] = []
-    for pause_start, pause_end in intervals:
+    merged: list[tuple[datetime, datetime, str]] = []
+    for pause_start, pause_end, title in intervals:
         if not merged or pause_start > merged[-1][1]:
-            merged.append([pause_start, pause_end])
+            merged.append((pause_start, pause_end, title))
         elif pause_end > merged[-1][1]:
-            merged[-1][1] = pause_end
+            old_start, _old_end, old_title = merged[-1]
+            merged[-1] = (old_start, pause_end, old_title if old_title == title else "Other activity")
+    return start, base_end, merged
 
+
+def effective_routine_end(
+    work_block: dict[str, Any],
+    all_blocks: list[dict[str, Any]],
+    work_day: date,
+) -> datetime:
+    """Return the finish after enabled non-work activities pause productive work."""
+    start, base_end, pauses = _routine_pause_intervals(work_block, all_blocks, work_day)
+    remaining = base_end - start
     cursor = start
-    for pause_start, pause_end in merged:
+    for pause_start, pause_end, _title in pauses:
         if pause_end <= cursor:
             continue
         if pause_start > cursor:
@@ -108,6 +111,49 @@ def effective_routine_end(
         if pause_start <= cursor < pause_end:
             cursor = pause_end
     return cursor + remaining
+
+
+def routine_work_state(
+    work_block: dict[str, Any],
+    all_blocks: list[dict[str, Any]],
+    now: datetime,
+) -> dict[str, Any]:
+    """Describe progress in a work block, excluding time spent in activities."""
+    start, base_end, pauses = _routine_pause_intervals(work_block, all_blocks, now.date())
+    finish = effective_routine_end(work_block, all_blocks, now.date())
+    planned = base_end - start
+    if now < start:
+        return {
+            "status": "upcoming", "start": start, "end": finish,
+            "remaining": planned, "pause_title": None, "pause_until": None,
+        }
+    if now >= finish:
+        return {
+            "status": "completed", "start": start, "end": finish,
+            "remaining": timedelta(0), "pause_title": None, "pause_until": None,
+        }
+
+    paused_total = timedelta(0)
+    active_pause = None
+    for pause_start, pause_end, title in pauses:
+        overlap_start = max(start, pause_start)
+        overlap_end = min(now, pause_end, finish)
+        if overlap_end > overlap_start:
+            paused_total += overlap_end - overlap_start
+        if pause_start <= now < pause_end:
+            active_pause = (title, pause_end)
+
+    wall_elapsed = max(timedelta(0), min(now, finish) - start)
+    productive_elapsed = min(planned, max(timedelta(0), wall_elapsed - paused_total))
+    remaining = max(timedelta(0), planned - productive_elapsed)
+    return {
+        "status": "paused" if active_pause else "in_progress",
+        "start": start,
+        "end": finish,
+        "remaining": remaining,
+        "pause_title": active_pause[0] if active_pause else None,
+        "pause_until": active_pause[1] if active_pause else None,
+    }
 
 
 def fire_due_alarms(
