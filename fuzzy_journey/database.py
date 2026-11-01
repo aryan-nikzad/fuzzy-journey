@@ -31,6 +31,7 @@ def initialize(path: Path | str = DATABASE_PATH) -> None:
                 one_shot_date TEXT,
                 sound_enabled INTEGER NOT NULL DEFAULT 1,
                 sound_key TEXT NOT NULL DEFAULT 'classic',
+                custom_sound_path TEXT,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 last_fired_date TEXT,
                 created_at TEXT NOT NULL,
@@ -96,9 +97,12 @@ def initialize(path: Path | str = DATABASE_PATH) -> None:
         # Additive migrations preserve databases created by earlier releases.
         migrations = (
             ("alarms", "sound_key", "TEXT NOT NULL DEFAULT 'classic'"),
+            ("alarms", "custom_sound_path", "TEXT"),
             ("routine_blocks", "end_alarm_enabled", "INTEGER NOT NULL DEFAULT 0"),
             ("routine_blocks", "sound_key", "TEXT NOT NULL DEFAULT 'classic'"),
+            ("routine_blocks", "custom_sound_path", "TEXT"),
             ("prayer_alarm_settings", "sound_key", "TEXT NOT NULL DEFAULT 'classic'"),
+            ("prayer_alarm_settings", "custom_sound_path", "TEXT"),
         )
         for table, column, definition in migrations:
             existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
@@ -116,7 +120,7 @@ def list_alarms(path: Path | str = DATABASE_PATH) -> list[dict[str, Any]]:
         rows = connection.execute(
             """
             SELECT id, title, alarm_time, days_mask, one_shot_date,
-                   sound_enabled, sound_key, enabled, last_fired_date
+                   sound_enabled, sound_key, custom_sound_path, enabled, last_fired_date
             FROM alarms
             ORDER BY
                 CASE WHEN one_shot_date IS NULL THEN 1 ELSE 0 END,
@@ -136,6 +140,7 @@ def save_alarm(
     one_shot_date: str | None = None,
     sound_enabled: bool = True,
     sound_key: str = "classic",
+    custom_sound_path: str | None = None,
     enabled: bool = True,
     alarm_id: int | None = None,
     path: Path | str = DATABASE_PATH,
@@ -149,6 +154,7 @@ def save_alarm(
         one_shot_date,
         int(sound_enabled),
         sound_key,
+        custom_sound_path,
         int(enabled),
         now,
     )
@@ -158,8 +164,8 @@ def save_alarm(
                 """
                 INSERT INTO alarms
                     (title, alarm_time, days_mask, one_shot_date,
-                     sound_enabled, sound_key, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     sound_enabled, sound_key, custom_sound_path, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (*values[:7], now, now),
             )
@@ -168,7 +174,7 @@ def save_alarm(
             """
             UPDATE alarms
             SET title=?, alarm_time=?, days_mask=?, one_shot_date=?,
-                sound_enabled=?, sound_key=?, enabled=?, updated_at=?, last_fired_date=NULL
+                sound_enabled=?, sound_key=?, custom_sound_path=?, enabled=?, updated_at=?, last_fired_date=NULL
             WHERE id=?
             """,
             (*values, alarm_id),
@@ -227,6 +233,25 @@ def get_day_entries(start_date: str, end_date: str, path: Path | str = DATABASE_
     return [dict(row) for row in rows]
 
 
+def get_app_setting(key: str, default: str = "", path: Path | str = DATABASE_PATH) -> str:
+    initialize(path)
+    with connect(path) as connection:
+        row = connection.execute(
+            "SELECT setting_value FROM app_settings WHERE setting_key=?", (key,)
+        ).fetchone()
+    return str(row["setting_value"]) if row else default
+
+
+def set_app_setting(key: str, value: str, path: Path | str = DATABASE_PATH) -> None:
+    initialize(path)
+    with connect(path) as connection:
+        connection.execute(
+            """INSERT INTO app_settings(setting_key, setting_value) VALUES (?, ?)
+               ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value""",
+            (key, value),
+        )
+
+
 def get_time_bank_start_date(path: Path | str = DATABASE_PATH) -> str:
     initialize(path)
     with connect(path) as connection:
@@ -248,23 +273,34 @@ def set_time_bank_start_date(start_date: str, path: Path | str = DATABASE_PATH) 
         )
 
 
-def day_balance(path: Path | str = DATABASE_PATH) -> dict[str, Any]:
+def day_balance(path: Path | str = DATABASE_PATH, as_of: date | None = None) -> dict[str, Any]:
+    """Count only dates from the tracking baseline through the current day.
+
+    Unclassified eligible dates count as normal (50%) days. Future dates and
+    dates before the baseline are excluded.
+    """
     initialize(path)
     start_date = get_time_bank_start_date(path)
+    start = date.fromisoformat(start_date)
+    today = as_of or date.today()
+    elapsed_days = max(0, (today - start).days + 1)
     with connect(path) as connection:
         rows = connection.execute(
-            "SELECT day_type, COUNT(*) AS total FROM day_entries WHERE day_date >= ? GROUP BY day_type",
-            (start_date,),
+            "SELECT day_type, COUNT(*) AS total FROM day_entries "
+            "WHERE day_date >= ? AND day_date <= ? GROUP BY day_type",
+            (start_date, today.isoformat()),
         ).fetchall()
     counts = {row["day_type"]: int(row["total"]) for row in rows}
     intensive = counts.get("75", 0)
     days_off = counts.get("off", 0)
     balance = intensive * 0.5 - days_off
+    normal_days = max(0, elapsed_days - intensive - days_off)
     return {
         "start_date": start_date,
+        "through_date": today.isoformat(),
         "intensive_days": intensive,
         "days_off": days_off,
-        "normal_days": counts.get("50", 0),
+        "normal_days": normal_days,
         "earned": intensive * 0.5,
         "consumed": days_off,
         "balance": balance,
@@ -284,7 +320,8 @@ def list_routine_blocks(path: Path | str = DATABASE_PATH) -> list[dict[str, Any]
 def save_routine_block(*, title: str, category: str, start_time: str, end_time: str,
                        days_mask: int = 127, alarm_enabled: bool = False,
                        end_alarm_enabled: bool = False, sound_enabled: bool = True,
-                       sound_key: str = "classic", enabled: bool = True,
+                       sound_key: str = "classic", custom_sound_path: str | None = None,
+                       enabled: bool = True,
                        block_id: int | None = None, path: Path | str = DATABASE_PATH) -> int:
     datetime.strptime(start_time, "%H:%M")
     datetime.strptime(end_time, "%H:%M")
@@ -294,17 +331,17 @@ def save_routine_block(*, title: str, category: str, start_time: str, end_time: 
         if block_id is None:
             cur = connection.execute(
                 """INSERT INTO routine_blocks
-                (title, category, start_time, end_time, days_mask, alarm_enabled, end_alarm_enabled, sound_enabled, sound_key, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (title, category, start_time, end_time, days_mask, alarm_enabled, end_alarm_enabled, sound_enabled, sound_key, custom_sound_path, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (title.strip() or "Routine", category, start_time, end_time, days_mask,
-                 int(alarm_enabled), int(end_alarm_enabled), int(sound_enabled), sound_key, int(enabled), now, now),
+                 int(alarm_enabled), int(end_alarm_enabled), int(sound_enabled), sound_key, custom_sound_path, int(enabled), now, now),
             )
             return int(cur.lastrowid)
         connection.execute(
             """UPDATE routine_blocks SET title=?, category=?, start_time=?, end_time=?,
-            days_mask=?, alarm_enabled=?, end_alarm_enabled=?, sound_enabled=?, sound_key=?, enabled=?, updated_at=? WHERE id=?""",
+            days_mask=?, alarm_enabled=?, end_alarm_enabled=?, sound_enabled=?, sound_key=?, custom_sound_path=?, enabled=?, updated_at=? WHERE id=?""",
             (title.strip() or "Routine", category, start_time, end_time, days_mask,
-             int(alarm_enabled), int(end_alarm_enabled), int(sound_enabled), sound_key, int(enabled), now, block_id),
+             int(alarm_enabled), int(end_alarm_enabled), int(sound_enabled), sound_key, custom_sound_path, int(enabled), now, block_id),
         )
         return block_id
 
@@ -324,17 +361,18 @@ def delete_routine_block(block_id: int, path: Path | str = DATABASE_PATH) -> Non
 
 def set_prayer_alarm(prayer_key: str, enabled: bool, offset_minutes: int = 0,
                      sound_enabled: bool = True, sound_key: str = "classic",
+                     custom_sound_path: str | None = None,
                      path: Path | str = DATABASE_PATH) -> None:
     now = datetime.now().isoformat(timespec="seconds")
     initialize(path)
     with connect(path) as connection:
         connection.execute(
-            """INSERT INTO prayer_alarm_settings(prayer_key, enabled, offset_minutes, sound_enabled, sound_key, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            """INSERT INTO prayer_alarm_settings(prayer_key, enabled, offset_minutes, sound_enabled, sound_key, custom_sound_path, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(prayer_key) DO UPDATE SET enabled=excluded.enabled,
             offset_minutes=excluded.offset_minutes, sound_enabled=excluded.sound_enabled,
-            sound_key=excluded.sound_key, updated_at=excluded.updated_at""",
-            (prayer_key, int(enabled), int(offset_minutes), int(sound_enabled), sound_key, now),
+            sound_key=excluded.sound_key, custom_sound_path=excluded.custom_sound_path, updated_at=excluded.updated_at""",
+            (prayer_key, int(enabled), int(offset_minutes), int(sound_enabled), sound_key, custom_sound_path, now),
         )
 
 
