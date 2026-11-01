@@ -10,15 +10,17 @@ The important design decision: **alarms do not rely on the GUI being open or the
 
 - A native-feeling GTK 4 / libadwaita desktop interface.
 - A daily overview with the next reminder, prayer times, and the 50% / 75% work and sleep plans.
-- Multiple reminders at different times, with a custom title and sound toggle.
+- Multiple reminders at different times, with selectable Classic, Gentle, Urgent or Digital alarm tones.
 - Recurring reminders on selected weekdays, or a one-time reminder on a chosen date.
 - Critical desktop notifications and an audible alarm tone.
 - Reminders continue after the application window is closed.
 - Local SQLite storage; no account, cloud service, push provider, or network request is involved in alarm delivery.
 - A bundled Shahrekord 2026 schedule, so the first launch can show prayer times while offline.
-- Optional prayer-data refresh from AlAdhan when an internet connection is available.
+- Independent prayer alarms with a selectable tone for each prayer.
+- Manual full-year prayer-data downloads (for example, 2027) for later offline use.
 - A reminders history, alarm service status, and a settings page.
-- Native desktop header-bar controls for moving, minimizing, maximizing and closing the window.
+- A matching application ID and desktop entry so the app icon groups correctly in the GNOME dock/taskbar.
+- A one- or two-minute test alarm so you can lock the screen and verify delivery.
 
 ## Linux installation
 
@@ -57,9 +59,11 @@ To remove the application while keeping your saved alarms and data:
 
 1. Create a reminder and choose its time.
 2. Select the weekdays on which it should repeat, or enter a one-time date in `YYYY-MM-DD` format.
-3. Enable or disable its sound.
-4. Save it. The reminder is persisted in SQLite.
-5. The systemd user service checks the local database every five seconds and issues a desktop notification plus the alarm sound when an alarm is due.
+3. Choose whether it should play a sound and select Classic, Gentle, Urgent or Digital.
+4. Save it. The reminder and selected tone are persisted in SQLite.
+5. The systemd user service checks the local database every five seconds and issues a desktop notification plus the selected alarm sound when the reminder is due.
+
+Prayer alarms also have independent enable switches and sound selectors. Routine blocks can alarm at their start, their end, or both. Wake-up, sleep, work and other activities use the same system. In Settings, schedule a one- or two-minute test alarm, then lock the screen (do not suspend the computer) to check that desktop audio is delivered.
 
 You can close the GUI after creating reminders. The service continues in the background and is configured to start at user login.
 
@@ -100,7 +104,7 @@ No telemetry or cloud sync is implemented. The alarm daemon only reads the local
 
 The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. The prayer page displays every remaining date in the available year; the calendar itself can navigate across months and years. Prayer alarms are resolved from the local date row, so they follow changing prayer times rather than using a fixed clock time.
 
-Prayer-data refresh is optional and requires a working connection. The app reuses the original `prayer_aio.py` updater and its AlAdhan calculation settings. Existing files are backed up by the original updater before replacement. If a later year is not bundled, add or refresh that year's CSV when connected; custom alarms do not depend on prayer-time data.
+Prayer-data downloads are optional and require a working connection. In Settings → Advanced · prayer data manager, enter a year such as `2027` and download its complete calendar. The app reuses `prayer_aio.py` and its Shahrekord / AlAdhan calculation settings. Existing raw and schedule CSVs are backed up before a forced refresh. Downloaded files stay in the app's local data folder and are used automatically when that year becomes current.
 
 Default location: Shahrekord, Iran (`32.3261, 50.8572`), AlAdhan method 7.
 
@@ -135,12 +139,14 @@ The tests cover weekday recurrence, one-time dates, the five-minute catch-up rul
 - **50% day:** neutral; it does not change the balance.
 - **75% day:** earns **+0.5 day**.
 - **Day off:** spends **1 day**.
+- An unclassified date defaults to **50%** and can be changed later, including after the day has passed.
+- Set a tracking start date to establish a zero-balance baseline; entries before that date are ignored.
 - The balance is allowed to become negative. For example, taking a day off first creates -1; two 75% days bring it back to zero.
 - Day types are stored by date in SQLite. The calendar is a planner, so entries can be assigned to future dates too. The balance includes all dates you have explicitly classified.
 
 ## Dynamic routines
 
-Create recurring blocks for work, sleep, wake-up, girlfriend calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state and optional start alarm. Edit or delete blocks as your routine changes. The routine alarm is independent of the GUI and is checked by the same offline daemon.
+Create recurring blocks for work, sleep, wake-up, calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state, selected tone and independent start/end alarm switches. When an enabled non-work activity overlaps a work block, the work clock pauses and the finish time moves later by the activity's duration. For example, an 08:00–16:00 work block with a 10:00–14:00 activity finishes at 20:00, preserving eight hours of actual work. End alarms use this adjusted finish time. All these alarms are delivered by the offline daemon, even when the GUI is closed.
 
 ## Project layout
 
