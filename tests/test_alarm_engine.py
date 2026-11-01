@@ -64,6 +64,7 @@ class AlarmEngineTests(unittest.TestCase):
             self.assertEqual(list_alarms(db)[0]["enabled"], 0)
 
     def test_two_intensive_days_earn_one_day_and_day_off_can_create_debt(self):
+        from datetime import date
         from fuzzy_journey.database import initialize, set_day_type, set_time_bank_start_date, day_balance
         with tempfile.TemporaryDirectory() as temp:
             db = Path(temp) / "days.sqlite3"
@@ -71,11 +72,44 @@ class AlarmEngineTests(unittest.TestCase):
             set_time_bank_start_date("2026-11-02", path=db)
             set_day_type("2026-11-02", "75", path=db)
             set_day_type("2026-11-03", "75", path=db)
-            self.assertEqual(day_balance(db)["balance"], 1.0)
+            self.assertEqual(day_balance(db, as_of=date(2026, 11, 5))["balance"], 1.0)
             set_day_type("2026-11-04", "off", path=db)
-            self.assertEqual(day_balance(db)["balance"], 0.0)
+            self.assertEqual(day_balance(db, as_of=date(2026, 11, 5))["balance"], 0.0)
             set_day_type("2026-11-05", "off", path=db)
-            self.assertEqual(day_balance(db)["balance"], -1.0)
+            self.assertEqual(day_balance(db, as_of=date(2026, 11, 5))["balance"], -1.0)
+
+    def test_future_days_and_days_before_baseline_do_not_affect_balance(self):
+        from datetime import date
+        from fuzzy_journey.database import initialize, set_day_type, set_time_bank_start_date, day_balance
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "days.sqlite3"
+            initialize(db)
+            set_time_bank_start_date("2026-11-02", path=db)
+            set_day_type("2026-11-01", "off", path=db)  # before the baseline
+            set_day_type("2026-11-03", "75", path=db)   # today
+            set_day_type("2026-11-04", "off", path=db)  # future
+            stats = day_balance(db, as_of=date(2026, 11, 3))
+            self.assertEqual(stats["balance"], 0.5)
+            self.assertEqual(stats["normal_days"], 1)
+            self.assertEqual(stats["days_off"], 0)
+
+    def test_custom_audio_paths_are_saved_for_all_alarm_types(self):
+        from fuzzy_journey.database import (
+            initialize, save_alarm, list_alarms, save_routine_block,
+            list_routine_blocks, set_prayer_alarm, list_prayer_alarms,
+        )
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "audio.sqlite3"
+            initialize(db)
+            custom_path = str(Path(temp) / "my-alarm.mp3")
+            save_alarm(title="MP3 alarm", alarm_time="07:00", days_mask=127,
+                       custom_sound_path=custom_path, path=db)
+            self.assertEqual(list_alarms(db)[0]["custom_sound_path"], custom_path)
+            save_routine_block(title="Wake up", category="wake", start_time="07:00",
+                end_time="07:30", custom_sound_path=custom_path, path=db)
+            self.assertEqual(list_routine_blocks(db)[0]["custom_sound_path"], custom_path)
+            set_prayer_alarm("Fajr", True, custom_sound_path=custom_path, path=db)
+            self.assertEqual(list_prayer_alarms(db)["Fajr"]["custom_sound_path"], custom_path)
 
     def test_work_block_pauses_during_other_activities(self):
         from datetime import date
@@ -101,6 +135,7 @@ class AlarmEngineTests(unittest.TestCase):
             self.assertEqual([event["title"] for event in events], ["Work finished"])
 
     def test_time_bank_start_date_resets_initial_balance(self):
+        from datetime import date
         from fuzzy_journey.database import initialize, set_day_type, set_time_bank_start_date, day_balance
         with tempfile.TemporaryDirectory() as temp:
             db = Path(temp) / "days.sqlite3"
@@ -109,7 +144,7 @@ class AlarmEngineTests(unittest.TestCase):
             set_day_type("2026-11-02", "75", path=db)
             set_day_type("2026-11-03", "75", path=db)
             set_time_bank_start_date("2026-11-02", path=db)
-            stats = day_balance(db)
+            stats = day_balance(db, as_of=date(2026, 11, 3))
             self.assertEqual(stats["balance"], 1.0)
             self.assertEqual(stats["days_off"], 0)
 
