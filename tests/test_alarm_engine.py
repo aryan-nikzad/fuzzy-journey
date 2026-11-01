@@ -111,6 +111,23 @@ class AlarmEngineTests(unittest.TestCase):
             set_prayer_alarm("Fajr", True, custom_sound_path=custom_path, path=db)
             self.assertEqual(list_prayer_alarms(db)["Fajr"]["custom_sound_path"], custom_path)
 
+    def test_work_block_progress_shows_productive_time_remaining(self):
+        from fuzzy_journey.alarm_engine import routine_work_state
+
+        work = {"id": 1, "category": "work", "start_time": "08:00", "end_time": "16:00",
+                "days_mask": 127, "enabled": 1}
+        call = {"id": 2, "category": "call", "start_time": "10:00", "end_time": "14:00",
+                "days_mask": 127, "enabled": 1}
+        paused = routine_work_state(work, [work, call], datetime(2026, 11, 2, 11, 0))
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["remaining"].total_seconds(), 6 * 3600)
+        self.assertEqual(paused["pause_until"], datetime(2026, 11, 2, 14, 0))
+        resumed = routine_work_state(work, [work, call], datetime(2026, 11, 2, 15, 0))
+        self.assertEqual(resumed["status"], "in_progress")
+        self.assertEqual(resumed["remaining"].total_seconds(), 5 * 3600)
+        upcoming = routine_work_state(work, [work, call], datetime(2026, 11, 2, 7, 0))
+        self.assertEqual(upcoming["status"], "upcoming")
+
     def test_work_block_pauses_during_other_activities(self):
         from datetime import date
         from fuzzy_journey.alarm_engine import effective_routine_end
