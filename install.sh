@@ -72,6 +72,7 @@ EOF
 
 systemctl --user daemon-reload
 systemctl --user enable --now fuzzy-journey.service
+systemctl --user restart fuzzy-journey.service
 
 echo
 echo "Fuzzy Journey is installed."
