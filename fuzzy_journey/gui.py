@@ -17,7 +17,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from fuzzy_journey import database
-from fuzzy_journey.alarm_engine import effective_routine_end, next_occurrence
+from fuzzy_journey.alarm_engine import effective_routine_end, next_occurrence, routine_work_state
 from fuzzy_journey.notifications import SOUND_PRESETS, play_alarm_sound
 from fuzzy_journey.paths import APP_DATA_DIR, APP_ROOT, ensure_data_dir, schedule_path
 
@@ -117,6 +117,46 @@ def duration_text(value: str) -> str:
         return f"{hours}h {minutes:02d}m" if minutes else f"{hours}h"
     except (ValueError, AttributeError):
         return value or "—"
+
+
+def schedule_range(day: date, start_value: str, end_value: str) -> tuple[datetime, datetime] | None:
+    """Parse a schedule block, treating equal start/end values as no block."""
+    start_value = str(start_value or "").strip()
+    end_value = str(end_value or "").strip()
+    if not start_value or not end_value or start_value == end_value:
+        return None
+    try:
+        start_clock = datetime.strptime(start_value, "%H:%M").time()
+        end_clock = datetime.strptime(end_value, "%H:%M").time()
+    except ValueError:
+        return None
+    start = datetime.combine(day, start_clock)
+    end = datetime.combine(day, end_clock)
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def clock_text(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        return datetime.strptime(value, "%H:%M").strftime("%H:%M")
+    except ValueError:
+        return "—"
+
+
+def alarm_sound_summary(sound_enabled: bool, sound_key: str = "classic",
+                        custom_path: str | None = None) -> str:
+    if not sound_enabled:
+        return "Sound off"
+    if custom_path:
+        return Path(custom_path).name
+    return SOUND_PRESETS.get(sound_key, "Classic")
+
+
+def routine_occurs_on(block: dict, day: date) -> bool:
+    return bool(int(block.get("days_mask") or 0) & (1 << day.weekday()))
 
 
 def copy_custom_audio(source_path: str) -> str:
