@@ -9,7 +9,7 @@ The important design decision: **alarms do not rely on the GUI being open or the
 ## What it does
 
 - A native-feeling GTK 4 / libadwaita desktop interface.
-- A daily overview with the next reminder, prayer times, and the 50% / 75% work and sleep plans.
+- A focused home dashboard with an in-place 50% / 75% / Day Off selector, productive work time remaining, adjusted work finish times, wake-up and bedtime, sleep duration, today's alarms with sound settings, prayer times and day-off balance. Configuration lives on the secondary pages.
 - Multiple reminders at different times, with selectable Classic, Gentle, Urgent or Digital tones, or a personal MP3 / audio file.
 - Custom audio files are copied into the app's local data folder so moving the original file will not break an alarm.
 - Recurring reminders on selected weekdays, or a one-time reminder on a chosen date.
@@ -147,7 +147,7 @@ The tests cover weekday recurrence, one-time dates, the five-minute catch-up rul
 
 ## Dynamic routines
 
-Create recurring blocks for work, sleep, wake-up, calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state, selected tone and independent start/end alarm switches. When an enabled non-work activity overlaps a work block, the work clock pauses and the finish time moves later by the activity's duration. For example, an 08:00–16:00 work block with a 10:00–14:00 activity finishes at 20:00, preserving eight hours of actual work. End alarms use this adjusted finish time. All these alarms are delivered by the offline daemon, even when the GUI is closed.
+Create recurring blocks for work, sleep, wake-up, calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state, selected tone and independent start/end alarm switches. The home dashboard shows the current or next work block, its productive time remaining, pauses, and adjusted finish time. When an enabled non-work activity overlaps a work block, the work clock pauses and the finish time moves later by the activity's duration. For example, an 08:00–16:00 work block with a 10:00–14:00 activity finishes at 20:00, preserving eight hours of actual work. The dashboard also shows day start, bedtime, planned sleep, activity blocks and all configured alarm times with their sound settings. A selected Day Off suppresses work-block alarms. Equal start and end times are treated as an empty block and are not displayed.
 
 ## Project layout
 
