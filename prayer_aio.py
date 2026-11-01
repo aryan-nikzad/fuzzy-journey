@@ -237,13 +237,18 @@ def parse_time(value: str) -> datetime:
 
 
 def parse_clock_time(value: str) -> clock_time:
-    """Validate a 24-hour HH:MM clock value for the evening work start."""
+    """Validate an evening work start in the afternoon or evening."""
     try:
-        return datetime.strptime(value, "%H:%M").time()
+        parsed = datetime.strptime(value, "%H:%M").time()
     except ValueError as exc:
         raise argparse.ArgumentTypeError(
             f"expected a valid 24-hour HH:MM time, got: {value!r}"
         ) from exc
+    if parsed.hour < 14:
+        raise argparse.ArgumentTypeError(
+            f"evening work must start at or after 14:00, got: {value!r}"
+        )
+    return parsed
 
 
 def duration_string(start: datetime, end: datetime) -> str:
