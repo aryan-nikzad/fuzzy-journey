@@ -117,7 +117,7 @@ python3 prayer_aio.py --flex-time 00:30
 python3 prayer_aio.py --reset-flex
 ```
 
-The CLI requires the `requests` Python package for downloading. Reading and displaying existing CSV schedules does not need a network request.
+The optional refresh action and CLI downloader require the `requests` Python package. On Ubuntu, install it with `sudo apt install python3-requests`. Reading and displaying existing CSV schedules and delivering alarms do not need it or make a network request.
 
 ## Tests
 

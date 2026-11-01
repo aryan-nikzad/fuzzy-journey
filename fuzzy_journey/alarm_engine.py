@@ -58,6 +58,15 @@ def fire_due_alarms(
 
     with database.connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
+        # Expire one-time reminders from earlier dates instead of leaving
+        # permanently enabled alarms that can no longer be delivered.
+        connection.execute(
+            """
+            UPDATE alarms SET enabled=0, updated_at=?
+            WHERE enabled=1 AND one_shot_date IS NOT NULL AND one_shot_date < ?
+            """,
+            (now.isoformat(timespec="seconds"), now.date().isoformat()),
+        )
         rows = connection.execute(
             """
             SELECT id, title, alarm_time, days_mask, one_shot_date,

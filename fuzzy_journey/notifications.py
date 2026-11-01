@@ -19,7 +19,7 @@ def ensure_alarm_sound(path: Path = ALARM_SOUND_PATH) -> Path:
     sample_rate = 22050
     melody = [(880, 0.42), (0, 0.16), (1175, 0.42), (0, 0.16), (880, 0.42), (0, 0.16), (1175, 0.75)]
     samples = bytearray()
-    for frequency, duration in melody * 3:
+    for frequency, duration in melody * 4:
         count = int(sample_rate * duration)
         for index in range(count):
             if frequency == 0:

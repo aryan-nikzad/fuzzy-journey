@@ -39,6 +39,30 @@ class AlarmEngineTests(unittest.TestCase):
         self.assertFalse(should_fire(alarm, datetime(2026, 11, 3, 7, 30)))
         self.assertTrue(should_fire(alarm, datetime(2026, 11, 4, 7, 30)))
 
+    def test_recurring_alarm_can_only_fire_once_per_day(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "alarms.sqlite3"
+            from fuzzy_journey.database import initialize, save_alarm
+            initialize(db)
+            save_alarm(title="Daily", alarm_time="07:30", days_mask=127, path=db)
+            self.assertEqual(len(fire_due_alarms(datetime(2026, 11, 2, 7, 30), db_path=str(db))), 1)
+            self.assertEqual(fire_due_alarms(datetime(2026, 11, 2, 7, 31), db_path=str(db)), [])
+
+    def test_past_one_time_alarm_is_expired_without_ringing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            db = Path(temp) / "alarms.sqlite3"
+            from fuzzy_journey.database import initialize, save_alarm, list_alarms
+            initialize(db)
+            save_alarm(
+                title="Missed",
+                alarm_time="07:30",
+                days_mask=0,
+                one_shot_date="2026-11-01",
+                path=db,
+            )
+            self.assertEqual(fire_due_alarms(datetime(2026, 11, 2, 7, 30), db_path=str(db)), [])
+            self.assertEqual(list_alarms(db)[0]["enabled"], 0)
+
     def test_firing_is_persisted_and_one_shot_is_disabled(self):
         with tempfile.TemporaryDirectory() as temp:
             db = Path(temp) / "alarms.sqlite3"
