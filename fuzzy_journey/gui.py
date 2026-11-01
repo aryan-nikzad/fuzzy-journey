@@ -650,7 +650,26 @@ class MainWindow(Adw.ApplicationWindow):
             row.append(check)
             row.append(label("Sound", "field-hint"))
             row.append(dropdown)
+            custom_path = settings.get("custom_sound_path")
+            custom_status = label(Path(custom_path).name if custom_path else "Built-in", "field-hint")
+            choose_custom = Gtk.Button.new_from_icon_name("document-open-symbolic")
+            choose_custom.add_css_class("flat")
+            choose_custom.set_tooltip_text("Choose a custom MP3 / audio file")
+            def custom_selected(path, error, prayer=key, status=custom_status):
+                if error:
+                    status.set_text(error)
+                    return
+                self._update_prayer_alarm(prayer, custom_sound_path=path, update_custom_sound=True)
+                status.set_text(Path(path).name if path else "Built-in")
+            choose_custom.connect("clicked", lambda _b, prayer=key, callback=custom_selected: choose_audio_file(self, callback))
+            row.append(choose_custom)
+            clear_custom = Gtk.Button.new_from_icon_name("media-playback-stop-symbolic")
+            clear_custom.add_css_class("flat")
+            clear_custom.set_tooltip_text("Use built-in sound")
+            clear_custom.connect("clicked", lambda _b, prayer=key, callback=custom_selected: callback(None, None))
+            row.append(clear_custom)
             card.append(row)
+            card.append(custom_status)
             self.prayer_alarm_checks[key] = check
             self.prayer_sound_dropdowns[key] = dropdown
         page.append(card)
@@ -663,7 +682,9 @@ class MainWindow(Adw.ApplicationWindow):
         return self._scroll_page(page)
 
     def _update_prayer_alarm(self, prayer_key: str, *, enabled: bool | None = None,
-                             sound_key: str | None = None) -> None:
+                             sound_key: str | None = None,
+                             custom_sound_path: str | None = None,
+                             update_custom_sound: bool = False) -> None:
         current = database.list_prayer_alarms().get(prayer_key, {})
         database.set_prayer_alarm(
             prayer_key,
@@ -671,6 +692,7 @@ class MainWindow(Adw.ApplicationWindow):
             int(current.get("offset_minutes", 0)),
             bool(current.get("sound_enabled", 1)),
             sound_key or str(current.get("sound_key") or "classic"),
+            custom_sound_path if update_custom_sound else current.get("custom_sound_path"),
         )
 
     def _build_calendar(self) -> Gtk.Widget:
