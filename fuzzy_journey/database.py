@@ -252,25 +252,6 @@ def set_app_setting(key: str, value: str, path: Path | str = DATABASE_PATH) -> N
         )
 
 
-def get_app_setting(key: str, default: str = "", path: Path | str = DATABASE_PATH) -> str:
-    initialize(path)
-    with connect(path) as connection:
-        row = connection.execute(
-            "SELECT setting_value FROM app_settings WHERE setting_key=?", (key,)
-        ).fetchone()
-    return str(row["setting_value"]) if row else default
-
-
-def set_app_setting(key: str, value: str, path: Path | str = DATABASE_PATH) -> None:
-    initialize(path)
-    with connect(path) as connection:
-        connection.execute(
-            """INSERT INTO app_settings(setting_key, setting_value) VALUES (?, ?)
-               ON CONFLICT(setting_key) DO UPDATE SET setting_value=excluded.setting_value""",
-            (key, value),
-        )
-
-
 def get_time_bank_start_date(path: Path | str = DATABASE_PATH) -> str:
     initialize(path)
     with connect(path) as connection:
