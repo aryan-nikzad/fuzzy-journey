@@ -75,7 +75,7 @@ import shutil
 import sys
 import time
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as clock_time, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -233,6 +233,16 @@ def parse_time(value: str) -> datetime:
     return datetime.strptime(value, "%H:%M")
 
 
+def parse_clock_time(value: str) -> clock_time:
+    """Validate a 24-hour HH:MM clock value for the evening work start."""
+    try:
+        return datetime.strptime(value, "%H:%M").time()
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"expected a valid 24-hour HH:MM time, got: {value!r}"
+        ) from exc
+
+
 def duration_string(start: datetime, end: datetime) -> str:
     """
     Duration between two times, formatted as HH:MM.
@@ -290,14 +300,18 @@ class WorkBlocks:
 
 
 def calculate_work_blocks(
-    fajr: datetime, isha: datetime, percentage: float, flex: timedelta = timedelta(0)
+    fajr: datetime,
+    isha: datetime,
+    percentage: float,
+    flex: timedelta = timedelta(0),
+    evening_start: clock_time | str = clock_time(18, 0),
 ) -> WorkBlocks:
     """
     Split `percentage` of the Fajr -> Isha window into two blocks, then add
     any `flex` time on top of that target:
 
         Block 1: Fajr -> 14:00 (as much of the target as fits)
-        Block 2: 18:00 -> onward (whatever didn't fit in block 1)
+        Block 2: evening_start -> onward (whatever didn't fit in block 1)
 
     The flex time is folded straight into the target and re-allocated
     through the same block logic, so it lands in Block 1 whenever Block 1
@@ -321,7 +335,10 @@ def calculate_work_blocks(
     block1_start = fajr
     block1_end = fajr + block1_duration
 
-    block2_start = fajr.replace(hour=18, minute=0, second=0, microsecond=0)
+    evening_clock = parse_clock_time(evening_start) if isinstance(evening_start, str) else evening_start
+    block2_start = fajr.replace(
+        hour=evening_clock.hour, minute=evening_clock.minute, second=0, microsecond=0
+    )
     if block2_start < fajr:
         block2_start += timedelta(days=1)
     block2_end = block2_start + remaining
@@ -340,7 +357,11 @@ def calculate_work_blocks(
 # STEP 4 - BUILD THE SCHEDULE ROWS
 # ================================================================
 
-def build_schedule(raw_rows: list[dict], flex: timedelta = timedelta(0)) -> list[dict]:
+def build_schedule(
+    raw_rows: list[dict],
+    flex: timedelta = timedelta(0),
+    evening_start: clock_time | str = clock_time(18, 0),
+) -> list[dict]:
     """
     Turn raw API rows into fully-populated schedule rows.
 
@@ -394,7 +415,7 @@ def build_schedule(raw_rows: list[dict], flex: timedelta = timedelta(0)) -> list
         # Flex time is written once per row; it feeds both plans below.
         out["FlexTime"] = timedelta_to_string(flex)
         for pct, suffix in ((0.50, "50"), (0.75, "75")):
-            blocks = calculate_work_blocks(fajr, isha, pct, flex)
+            blocks = calculate_work_blocks(fajr, isha, pct, flex, evening_start)
             out[f"WorkTarget_{suffix}"] = timedelta_to_string(blocks.total)
             out[f"WorkOverflow_{suffix}"] = timedelta_to_string(blocks.remain)
             out[f"MorningBlockStart_{suffix}"] = blocks.block1_start.strftime("%H:%M")
@@ -706,6 +727,10 @@ def parse_args() -> argparse.Namespace:
                         help="Remove all flex time (set to 00:00) by regenerating the "
                              "schedule from raw (no flex time).")
 
+    parser.add_argument("--evening-start", type=parse_clock_time, default=None,
+                        help="Set the evening work-block start (HH:MM). When supplied, "
+                             "the schedule is rebuilt from existing raw data without downloading.")
+
     parser.add_argument("--city", "-c", default=CITY_SLUG, help="City name (used for the filename).")
     parser.add_argument("--year", "-y", type=int, default=YEAR, help="Year to fetch.")
     parser.add_argument("--lat", "-l", type=float, default=LATITUDE, help="Latitude.")
@@ -799,7 +824,7 @@ def main() -> None:
     if args.file:
         return show_schedule(Path(args.file))
 
-    if args.today or args.tomorrow or (args.date and not args.override):
+    if (args.today or args.tomorrow or (args.date and not args.override)) and args.evening_start is None:
         return show_schedule()
 
     if args.schedule_only and not (
@@ -829,10 +854,20 @@ def main() -> None:
     else:
         flex = args.flex_time  # a timedelta, or None if --flex-time absent
 
+    # Rebuild with the existing flex-time value when only the evening boundary changes.
+    if args.evening_start is not None and args.flex_time is None and not args.reset_flex and sched_exists:
+        existing_schedule = load_rows(SCHEDULE_FILE)
+        if existing_schedule:
+            try:
+                flex = parse_hhmm(existing_schedule[0].get("FlexTime", "00:00"))
+            except argparse.ArgumentTypeError:
+                flex = timedelta(0)
+
     want_schedule = (
         args.override
         or args.flex_time is not None
         or args.reset_flex
+        or args.evening_start is not None
         or not sched_exists
     )
     need_download = args.override or not raw_exists
@@ -868,6 +903,8 @@ def main() -> None:
         print("Schedule file missing — recalculating schedule from the existing "
               "raw data (no download needed).")
 
+    if args.evening_start is not None:
+        print(f"Evening work starts at {args.evening_start.strftime('%H:%M')} — schedule rebuilt from local raw data.")
     if args.reset_flex:
         print("Flex time cleared (00:00) — schedule rebuilt from raw, no flex time.")
     elif args.flex_time is not None:
@@ -896,7 +933,11 @@ def main() -> None:
             # on disk. Load it so the schedule is always generated from raw.
             raw_rows = load_rows(RAW_FILE)
         log.info("Calculating schedule for %d days ...", len(raw_rows))
-        schedule_rows = build_schedule(raw_rows, flex if flex is not None else timedelta(0))
+        schedule_rows = build_schedule(
+            raw_rows,
+            flex if flex is not None else timedelta(0),
+            args.evening_start or clock_time(18, 0),
+        )
         write_csv(schedule_rows, SCHEDULE_FIELDNAMES, SCHEDULE_FILE)
 
     # ---- done ----
