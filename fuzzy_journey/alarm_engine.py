@@ -265,6 +265,12 @@ def fire_due_schedule_events(now: datetime | None = None, *, db_path: str | None
             start_day = now.date() + timedelta(days=offset)
             if not (int(block.get("days_mask") or 0) & WEEKDAY_BITS[start_day.weekday()]):
                 continue
+            if str(block.get("category", "")).lower() == "work":
+                day_entry = database.get_day_entries(
+                    start_day.isoformat(), start_day.isoformat(), path
+                )
+                if day_entry and day_entry[0]["day_type"] == "off":
+                    continue
             start_due, base_end = _block_interval(block, start_day)
             sound_enabled = bool(block.get("sound_enabled", 1))
             sound_key = str(block.get("sound_key") or "classic")
