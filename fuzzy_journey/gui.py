@@ -764,14 +764,16 @@ class MainWindow(Adw.ApplicationWindow):
         self.day_notes = Gtk.Entry()
         self.day_notes.set_placeholder_text("Optional note for this day")
         edit.append(self.day_notes)
-        save = Gtk.Button(label="Save day type")
-        save.add_css_class("suggested-action")
-        save.connect("clicked", self._save_selected_day)
-        edit.append(save)
+        self.day_scope_note = label("", "field-hint", wrap=True)
+        edit.append(self.day_scope_note)
+        self.save_day_button = Gtk.Button(label="Save day type")
+        self.save_day_button.add_css_class("suggested-action")
+        self.save_day_button.connect("clicked", self._save_selected_day)
+        edit.append(self.save_day_button)
         page.append(edit)
         self.calendar_selected_date = date.today()
         self.calendar_month = date.today().replace(day=1)
-        self._render_calendar()
+        self._select_calendar_day(date.today())
         return self._scroll_page(page)
 
     def _shift_calendar_month(self, amount: int) -> None:
@@ -786,10 +788,25 @@ class MainWindow(Adw.ApplicationWindow):
     def _select_calendar_day(self, day: date) -> None:
         self.calendar_selected_date = day
         self.selected_day_label.set_text(day.strftime("%A, %d %B %Y"))
+        start_date = date.fromisoformat(database.get_time_bank_start_date())
+        today = date.today()
+        counts_for_bank = start_date <= day <= today
         entries = database.get_day_entries(day.isoformat(), day.isoformat())
         saved = entries[0] if entries else None
-        self.day_type_dropdown.set_selected({"50": 0, "75": 1, "off": 2}.get(saved["day_type"], 0) if saved else 0)
-        self.day_notes.set_text(saved["notes"] if saved else "")
+        self.day_type_dropdown.set_selected(
+            {"50": 0, "75": 1, "off": 2}.get(saved["day_type"], 0) if saved and counts_for_bank else 0
+        )
+        self.day_notes.set_text(saved["notes"] if saved and counts_for_bank else "")
+        self.day_type_dropdown.set_sensitive(counts_for_bank)
+        self.day_notes.set_sensitive(counts_for_bank)
+        self.save_day_button.set_sensitive(counts_for_bank)
+        if day < start_date:
+            self.day_scope_note.set_text(f"Before tracking started on {start_date}. This date has no status and is not counted.")
+        elif day > today:
+            self.day_scope_note.set_text("Future date. Its status stays blank and it is not counted yet.")
+        else:
+            status = "50% by default" if not saved else {"50": "50%", "75": "75%", "off": "Day off"}[saved["day_type"]]
+            self.day_scope_note.set_text(f"Included in the time bank · {status}. You can edit past days if something unexpected happened.")
         self._render_calendar()
 
     def _apply_time_bank_start_date(self, _button: Gtk.Button | None) -> None:
@@ -804,8 +821,13 @@ class MainWindow(Adw.ApplicationWindow):
         self.refresh_calendar()
 
     def _save_selected_day(self, _button: Gtk.Button) -> None:
+        start_date = date.fromisoformat(database.get_time_bank_start_date())
+        today = date.today()
+        if not start_date <= self.calendar_selected_date <= today:
+            return
         kind = {0: "50", 1: "75", 2: "off"}.get(self.day_type_dropdown.get_selected(), "50")
         database.set_day_type(self.calendar_selected_date.isoformat(), kind, self.day_notes.get_text().strip())
+        self._select_calendar_day(self.calendar_selected_date)
         self.refresh_calendar()
         self.refresh_overview()
 
@@ -831,18 +853,25 @@ class MainWindow(Adw.ApplicationWindow):
                     text_value = " "
                 else:
                     entry = entries.get(day.isoformat())
-                    suffix = {"50": " · 50", "75": " · 75", "off": " · OFF"}.get(entry["day_type"], "") if entry else " · 50"
+                    start_date = date.fromisoformat(database.get_time_bank_start_date())
+                    today = date.today()
+                    if start_date <= day <= today:
+                        effective_type = entry["day_type"] if entry else "50"
+                        suffix = {"50": " · 50", "75": " · 75", "off": " · OFF"}[effective_type]
+                    else:
+                        suffix = ""
                     text_value = f"{day.day}{suffix}"
                 button = Gtk.Button(label=text_value)
                 button.set_sensitive(day.month == self.calendar_month.month)
                 button.set_size_request(68, 42)
                 if day.month == self.calendar_month.month and not entries.get(day.isoformat()):
                     button.set_tooltip_text("Default day: 50% (you can change this later).")
+                eligible_day = date.fromisoformat(database.get_time_bank_start_date()) <= day <= date.today()
                 if day == self.calendar_selected_date:
                     button.add_css_class("suggested-action")
-                elif entries.get(day.isoformat(), {}).get("day_type") == "75":
+                elif eligible_day and entries.get(day.isoformat(), {}).get("day_type") == "75":
                     button.add_css_class("success")
-                elif entries.get(day.isoformat(), {}).get("day_type") == "off":
+                elif eligible_day and entries.get(day.isoformat(), {}).get("day_type") == "off":
                     button.add_css_class("warning")
                 button.connect("clicked", lambda _b, selected=day: self._select_calendar_day(selected))
                 self.calendar_grid.attach(button, col, row, 1, 1)
