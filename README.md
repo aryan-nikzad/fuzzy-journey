@@ -92,3 +92,6 @@ make screenshots # regenerate docs/screenshots
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture and [AGENTS.md](AGENTS.md) for the rules that must not break. MIT licensed.
+
+Proudly made with the help of my great buddies ❤️  
+OpenAI ChatGPT and Anthropic Claude.
