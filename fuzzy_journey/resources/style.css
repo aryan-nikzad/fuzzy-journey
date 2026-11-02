@@ -1,0 +1,50 @@
+/* Fuzzy Journey: deliberately small. Colours come from libadwaita, so the app
+   follows the system theme and accent colour. Only type and spacing live here. */
+
+.fj-numeric, .fj-time, .fj-hero, .fj-balance, .fj-stat-value { font-feature-settings: "tnum"; }
+
+/* Today: the hero number */
+.fj-overline { font-size: 11px; font-weight: 700; letter-spacing: 1.2px; opacity: .6; }
+.fj-hero { font-size: 56px; font-weight: 800; letter-spacing: -1.5px; }
+.fj-hero-sub { font-size: 15px; opacity: .75; }
+
+/* Timeline rows */
+.fj-time { font-weight: 700; min-width: 3.6em; }
+row.fj-past { opacity: .42; }
+row.fj-now { background-color: alpha(@accent_bg_color, .12); }
+row.fj-now .fj-time { color: @accent_color; }
+row.fj-quiet .title { font-weight: 500; }
+row.fj-quiet { min-height: 40px; }
+
+/* Day-kind selector */
+.fj-kinds button { padding: 2px 6px; }
+.fj-kinds button:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
+.fj-kinds button:checked .dim-label { opacity: .85; }
+
+/* Bank */
+.fj-balance { font-size: 56px; font-weight: 800; letter-spacing: -1.5px; }
+.fj-stat-value { font-size: 24px; font-weight: 700; }
+.fj-card { background-color: @card_bg_color; border-radius: 14px; padding: 18px; box-shadow: 0 0 0 1px alpha(@borders, .6); }
+
+/* Calendar */
+.fj-day { min-width: 0; min-height: 34px; padding: 0; border-radius: 10px; background: none; font-feature-settings: "tnum"; }
+.fj-day:hover { background-color: alpha(currentColor, .08); }
+.fj-day.fj-day-push { background-color: alpha(@accent_bg_color, .28); }
+.fj-day.fj-day-rest { background-color: alpha(@warning_bg_color, .32); }
+.fj-day.fj-day-today { font-weight: 800; box-shadow: inset 0 0 0 2px alpha(currentColor, .35); }
+.fj-day.fj-day-selected { background-color: @accent_bg_color; color: @accent_fg_color; }
+.fj-weekday { font-size: 11px; font-weight: 700; opacity: .5; }
+
+/* Time spin buttons */
+.fj-time-spin { min-width: 3.2em; font-feature-settings: "tnum"; }
+.fj-day-toggle { padding: 4px 6px; font-size: 12px; }
+
+/* Prayer table */
+.fj-prayer-head { font-size: 11px; font-weight: 700; opacity: .55; }
+.fj-prayer-time { font-feature-settings: "tnum"; }
+
+/* Philosophy */
+.fj-idea-title { font-size: 22px; font-weight: 800; letter-spacing: -.3px; }
+.fj-idea-number { font-size: 13px; font-weight: 800; min-width: 28px; min-height: 28px; border-radius: 99px;
+                  background-color: alpha(@accent_bg_color, .2); color: @accent_color; }
+.fj-day-toggle:checked { background-color: @accent_bg_color; color: @accent_fg_color; }

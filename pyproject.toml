@@ -1,0 +1,22 @@
+[project]
+name = "fuzzy-journey"
+version = "2.0.0"
+description = "A calmer daily rhythm: your day, shaped around prayer and focused work."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = []  # PyGObject / GTK 4 / libadwaita come from the system packages
+
+[project.urls]
+Homepage = "https://github.com/aryan-nikzad/fuzzy-journey"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501", "E402", "B023"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B", "E731"]

@@ -1,0 +1,178 @@
+"""Plain data objects shared by the database, the alarm service and the UI."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date, time
+from pathlib import Path
+
+from .rhythm import DayKind
+from .timeutil import ALL_DAYS, parse_clock
+
+# --------------------------------------------------------------------------
+# Sounds
+# --------------------------------------------------------------------------
+
+SOUND_PRESETS = {
+    "classic": "Classic",
+    "gentle": "Gentle",
+    "urgent": "Urgent",
+    "digital": "Digital",
+}
+
+
+@dataclass(frozen=True)
+class Sound:
+    """How an alarm should sound: off, a built-in tone, or a personal file."""
+
+    enabled: bool = True
+    key: str = "classic"
+    custom_path: str | None = None
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "Silent"
+        if self.custom_path:
+            return Path(self.custom_path).name
+        return SOUND_PRESETS.get(self.key, "Classic")
+
+
+# --------------------------------------------------------------------------
+# Reminders, activities, prayer alarms, day entries
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class Alarm:
+    """A reminder: a time, plus either repeat weekdays or one specific date."""
+
+    title: str
+    time: str  # "HH:MM" or "HH:MM:SS"
+    days_mask: int = ALL_DAYS
+    one_shot_date: str | None = None
+    sound: Sound = field(default_factory=Sound)
+    enabled: bool = True
+    last_fired_date: str | None = None
+    id: int | None = None
+
+    @property
+    def clock(self) -> time:
+        return parse_clock(self.time)
+
+    @property
+    def is_one_shot(self) -> bool:
+        return bool(self.one_shot_date)
+
+
+ACTIVITY_CATEGORIES = {
+    "personal": "Personal",
+    "work": "Work",
+    "health": "Health",
+    "call": "Call",
+    "prayer": "Prayer",
+    "wake": "Wake-up",
+    "sleep": "Sleep",
+}
+
+
+@dataclass
+class Activity:
+    """A recurring block of the day: a call, the gym, a custom work shift, sleep."""
+
+    title: str
+    category: str
+    start: str  # "HH:MM"
+    end: str  # "HH:MM"
+    days_mask: int = ALL_DAYS
+    alarm_at_start: bool = False
+    alarm_at_end: bool = False
+    sound: Sound = field(default_factory=Sound)
+    enabled: bool = True
+    id: int | None = None
+
+    @property
+    def start_clock(self) -> time:
+        return parse_clock(self.start)
+
+    @property
+    def end_clock(self) -> time:
+        return parse_clock(self.end)
+
+    @property
+    def is_work(self) -> bool:
+        return self.category.lower() == "work"
+
+    @property
+    def category_label(self) -> str:
+        return ACTIVITY_CATEGORIES.get(self.category, self.category.title())
+
+
+PRAYER_NAMES = ("Fajr", "Sunrise", "Dhuhr", "Asr", "Maghrib", "Isha")
+
+
+@dataclass
+class PrayerAlarm:
+    key: str
+    enabled: bool = False
+    offset_minutes: int = 0
+    sound: Sound = field(default_factory=Sound)
+
+
+@dataclass(frozen=True)
+class DayEntry:
+    day: date
+    kind: DayKind
+    note: str = ""
+
+
+@dataclass(frozen=True)
+class FiredEvent:
+    title: str
+    fired_at: str
+
+
+# --------------------------------------------------------------------------
+# Location
+# --------------------------------------------------------------------------
+
+#: AlAdhan calculation methods (https://aladhan.com/calculation-methods).
+CALCULATION_METHODS = {
+    0: "Shia Ithna-Ashari, Leva Institute, Qum",
+    1: "University of Islamic Sciences, Karachi",
+    2: "Islamic Society of North America (ISNA)",
+    3: "Muslim World League",
+    4: "Umm Al-Qura University, Makkah",
+    5: "Egyptian General Authority of Survey",
+    7: "Institute of Geophysics, University of Tehran",
+    8: "Gulf Region",
+    9: "Kuwait",
+    10: "Qatar",
+    11: "Majlis Ugama Islam Singapura",
+    12: "Union Organisation Islamique de France",
+    13: "Diyanet İşleri Başkanlığı, Turkey",
+}
+
+
+@dataclass(frozen=True)
+class Location:
+    name: str = "Shahrekord"
+    latitude: float = 32.3261
+    longitude: float = 50.8572
+    method: int = 7
+
+    @property
+    def slug(self) -> str:
+        return slugify(self.name)
+
+    @property
+    def method_name(self) -> str:
+        return CALCULATION_METHODS.get(self.method, f"Method {self.method}")
+
+
+def slugify(name: str) -> str:
+    """Lowercase ASCII-ish file slug: ``"New York"`` -> ``"new-york"``."""
+    keep = [c.lower() if c.isalnum() else "-" for c in name.strip()]
+    slug = "".join(keep)
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+    return slug.strip("-") or "home"

@@ -1,176 +1,94 @@
-# Fuzzy Journey
+<p align="center"><img src="fuzzy_journey/resources/org.anyatech.FuzzyJourney.svg" width="96" alt=""></p>
 
-**A local-first daily planner and alarm app for Linux.**
+<h1 align="center">Fuzzy Journey</h1>
+<p align="center"><b>A calmer daily rhythm.</b><br>Your day, shaped around prayer and focused work.</p>
 
-Fuzzy Journey builds a wake / work / rest rhythm around Islamic prayer times. The original Python scheduling engine remains available, while the desktop app adds a polished GTK 4 + libadwaita interface and a persistent Linux alarm service.
+<p align="center"><img src="docs/screenshots/today-light.png" width="420" alt="The Today screen"> <img src="docs/screenshots/today-dark.png" width="420" alt="The Today screen in dark mode"></p>
 
-The important design decision: **alarms do not rely on the GUI being open or the internet being available.** Reminders are stored in a local SQLite database and delivered by a user-level systemd service.
+> **The day is given.**
+> **Work a share.**
+> **Bank the rest.**
+> **Protect the night.**
 
-## What it does
+Fuzzy Journey is a small, quiet desktop app for GNOME. It plans each day from the prayer times of your city, tells you how much work is left, banks the rest you earn, and rings your alarms, all offline, with no account.
 
-- A native-feeling GTK 4 / libadwaita desktop interface.
-- A focused home dashboard with an in-place 50% / 75% / Day Off selector, productive work time remaining, adjusted work finish times, wake-up and bedtime, sleep duration, today's alarms with sound settings, prayer times and day-off balance. Configuration lives on the secondary pages.
-- Multiple reminders at different times, with selectable Classic, Gentle, Urgent or Digital tones, or a personal MP3 / audio file.
-- Custom audio files are copied into the app's local data folder so moving the original file will not break an alarm.
-- Recurring reminders on selected weekdays, or a one-time reminder on a chosen date.
-- Critical desktop notifications and an audible alarm tone.
-- Reminders continue after the application window is closed.
-- Local SQLite storage; no account, cloud service, push provider, or network request is involved in alarm delivery.
-- A bundled Shahrekord 2026 schedule, so the first launch can show prayer times while offline.
-- Independent prayer alarms with a selectable tone or personal audio file for each prayer.
-- Manual full-year prayer-data downloads (for example, 2027) for later offline use.
-- A reminders history, alarm service status, and a settings page.
-- A matching application ID and desktop entry so the app icon groups correctly in the GNOME dock/taskbar.
-- A one- or two-minute test alarm so you can lock the screen and verify delivery.
+## The idea
 
-## Linux installation
+| | |
+|---|---|
+| **The day is given.** | Fajr to Isha is your day. Prayer times, not arbitrary hours, set its edges, so long summer days and short winter days both stay in proportion. |
+| **Work a share.** | Give work a share of the day, not a number of hours: **Steady** 50%, **Push** 75%. Work fills the morning first, until 14:00. The afternoon stays yours; the evening is only for overflow. |
+| **Bank the rest.** | Each Push day banks half a day. Each Rest day spends a whole one. Two Push days buy one Rest day. The balance may go negative, but you always see it. |
+| **Protect the night.** | Sleep is measured against the natural night, Isha to the next Fajr. Evening work is the last resort, and its cost is shown as sleep given up. |
 
-The supported desktop target is Ubuntu / GNOME with systemd, GTK 4 and libadwaita.
+Two practices keep it honest: **count focus, not clock time** (a call pauses the work clock; the finish moves later, the work stays whole) and **keep it yours** (everything stays on this computer; alarms ring without internet).
 
-Install the desktop bindings and notification helper once:
+Read the full version, with worked examples, in [PHILOSOPHY.md](PHILOSOPHY.md). The app shows it on first launch and under **Menu → Philosophy**.
 
-```bash
-sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libnotify-bin
-```
+## Install
 
-For built-in tones, use a working PipeWire or PulseAudio session; Fuzzy Journey checks for `paplay`, `pw-play`, or `aplay`. For personal MP3 / AAC / M4A / FLAC audio, install an MP3-capable player such as `mpv` (`sudo apt install mpv`), `ffmpeg` (`ffplay`), `mpg123`, or VLC. The selected file is imported into `~/.local/share/fuzzy-journey/custom-sounds/`.
-
-From the repository directory:
+Requires Ubuntu 24.04+ (or any GNOME system with GTK 4 and libadwaita 1.4+) and systemd.
 
 ```bash
-chmod +x install.sh
+sudo apt install python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libnotify-bin   # once
+git clone https://github.com/aryan-nikzad/fuzzy-journey && cd fuzzy-journey
 ./install.sh
 ```
 
-The installer copies the application to `~/.local/share/fuzzy-journey/app`, creates an application-menu entry, and enables `fuzzy-journey.service` as a user service. It does not need internet access after the required desktop packages are present.
+Open **Fuzzy Journey** from the applications menu. Re-run `./install.sh` any time to update; `./uninstall.sh` removes the app and keeps your data. For your own MP3/OGG alarm sounds, also `sudo apt install mpv`.
 
-Launch **Fuzzy Journey** from the applications menu, or run:
+To try it without installing: `./run.sh`.
 
-```bash
-~/.local/bin/fuzzy-journey
-```
+## Using it
 
-To remove the application while keeping your saved alarms and data:
+| Screen | What it is for |
+|---|---|
+| **Today** | How much work is left, the shape of the day from wake to sleep, and a timeline of everything coming. Choose Steady, Push or Rest in one tap. |
+| **Routine** | Your activities (calls, gym, meals, a custom wake or sleep time), when evening work starts, and what each kind of day would ask of you today. |
+| **Bank** | Your balance of rest, and a calendar to mark Push and Rest days, today or in the past. |
+| **Alarms** | Reminders, prayer alarms that follow the timetable, and whether the alarm service is running. |
+| **Prayers** | The timetable for the year. |
 
-```bash
-./uninstall.sh
-```
+Shortcuts: `Ctrl+1`…`Ctrl+5` switch screens, `Ctrl+,` preferences, `F1` philosophy, `Ctrl+Q` quit.
 
-## How alarms work
+**First launch:** the app ships with the 2026 timetable for Shahrekord. For another place or year, open **Menu → Preferences**, set your location, and download the timetable. That is the only time the internet is needed.
 
-1. Create a reminder and choose its time.
-2. Select the weekdays on which it should repeat, or enter a one-time date in `YYYY-MM-DD` format.
-3. Choose whether it should play a sound and select Classic, Gentle, Urgent or Digital.
-4. Save it. The reminder and selected tone are persisted in SQLite.
-5. The systemd user service checks the local database every five seconds and issues a desktop notification plus the selected alarm sound when the reminder is due.
+## How a day is computed
 
-Prayer alarms also have independent enable switches, built-in tone selectors and custom audio file pickers. The Alarms and Daily Schedule editors have the same custom audio picker; the Settings test alarm can use a personal file too. Routine blocks can alarm at their start, their end, or both. Wake-up, sleep, work and other activities use the same system. In Settings, schedule a one- or two-minute test alarm, then lock the screen (do not suspend the computer) to check that desktop audio is delivered.
+For January 1st in Shahrekord (Fajr 05:42, Isha 18:20, so the day is 12 h 38 min):
 
-You can close the GUI after creating reminders. The service continues in the background and is configured to start at user login.
+| | Work | Blocks | Bed | Sleep given up |
+|---|---|---|---|---|
+| **Steady 50%** | 6 h 19 min | 05:42-12:01 | 18:20 | none |
+| **Push 75%** | 9 h 28 min | 05:42-14:00, then 18:00-19:10 | 19:10 | 50 min |
+| **Rest** | none | none | 18:20 | none |
 
-The scheduler allows a **five-minute catch-up window**. For example, if the service starts again shortly after an alarm time, it can still deliver that alarm once. A recurring reminder is recorded as fired for that local date, so it cannot ring repeatedly during the same minute or service restart. One-time reminders are automatically disabled after delivery.
+A 07:30-08:00 call during Steady work moves the finish from 12:01 to 12:31. The work is still 6 h 19 min. Personal *Wake* and *Sleep* activities override the Fajr and Isha defaults.
 
-Useful service commands:
+## Command line
 
-```bash
-systemctl --user status fuzzy-journey.service
-systemctl --user restart fuzzy-journey.service
-journalctl --user -u fuzzy-journey.service -f
-```
-
-## Offline and power-state behaviour
-
-Alarm delivery is completely local. It does not contact AlAdhan, GitHub, a push-notification provider, or any remote server.
-
-There are unavoidable operating-system limits:
-
-- The computer must be powered on. A normal desktop app cannot make sound while the computer is shut down.
-- The user session must be logged in for desktop notifications and audio to be available.
-- A suspended computer cannot play an alarm at the scheduled instant unless the hardware / OS wakes it. On resume, the service can catch up if the alarm is no more than five minutes late.
-- If a reminder is more than five minutes late when the service returns, it is treated as missed rather than playing an outdated alarm hours later.
-
-For dependable use, keep the user session logged in and disable automatic suspend during periods when alarms must be heard. The background service is independent of the app window, not of the computer's power state.
-
-## Data and privacy
-
-Everything lives on the device:
-
-- Database: `~/.local/share/fuzzy-journey/fuzzy-journey.sqlite3`
-- Generated alarm tone: `~/.local/share/fuzzy-journey/alarm.wav`
-- Downloaded prayer schedules and backups: `~/.local/share/fuzzy-journey/`
-
-No telemetry or cloud sync is implemented. The alarm daemon only reads the local database and calls the desktop notification / audio tools.
-
-## Prayer-time data
-
-The included Shahrekord 2026 schedule is read directly from the bundled CSV, so it works on first launch without a fetch. The prayer page has previous / next year navigation. The current year opens on upcoming dates and has a full-year toggle; other downloaded years show the complete year. When a selected year is missing, the page offers a direct download action for that year. Prayer alarms are resolved from the local date row, so they follow changing prayer times rather than using a fixed clock time.
-
-Prayer-data downloads are optional and require a working connection. In Settings → Advanced · prayer data manager, enter a year such as `2027` and download its complete calendar. The app reuses `prayer_aio.py` and its Shahrekord / AlAdhan calculation settings. Existing raw and schedule CSVs are backed up before a forced refresh. Downloaded files stay in the app's local data folder and are used automatically when that year becomes current.
-
-Default location: Shahrekord, Iran (`32.3261, 50.8572`), AlAdhan method 7.
-
-## Original command-line planner
-
-The original CLI remains available:
+The original planner is still here, with the same flags and output:
 
 ```bash
-python3 prayer_aio.py --today
-python3 prayer_aio.py --tomorrow
-python3 prayer_aio.py --50 --tomorrow
-python3 prayer_aio.py --75
-python3 prayer_aio.py --date 15-03-2026
-python3 prayer_aio.py --flex-time 00:30
-python3 prayer_aio.py --reset-flex
+python3 prayer_aio.py --today                  # today's plan
+python3 prayer_aio.py --75 --tomorrow          # only the 75% plan, tomorrow
+python3 prayer_aio.py --flex-time 00:30        # add half an hour of work every day
+python3 prayer_aio.py --year 2027 --evening-start 19:30 --no-show
 ```
 
-The optional refresh action and CLI downloader require the `requests` Python package. On Ubuntu, install it with `sudo apt install python3-requests`. Reading and displaying existing CSV schedules and delivering alarms do not need it or make a network request.
+After install it is also available as `fuzzy-journey-planner`. Run it with `--help` for everything.
 
-## Tests
+## Your data
 
-Run the alarm scheduling tests with the standard library:
+Everything lives in `~/.local/share/fuzzy-journey/`: one SQLite file (alarms, activities, day marks, settings) and the downloaded timetables as CSV. Replaced timetables are backed up to `backup/` first. There is no account, no analytics and no sync. Updating from version 1 keeps all your data.
+
+## Development
 
 ```bash
-PYTHONPATH=. python3 -m unittest discover -s tests -v
+make test        # unit tests (no GTK needed)
+make test-ui     # GUI smoke tests, headless via xvfb
+make lint
+make screenshots # regenerate docs/screenshots
 ```
 
-The tests cover weekday recurrence, one-time dates, the five-minute catch-up rule, one-time delivery persistence, routine alarm deduplication, and time-bank accounting.
-
-## Day types and time bank
-
-- **50% day:** neutral; it does not change the balance.
-- **75% day:** earns **+0.5 day**.
-- **Day off:** spends **1 day**.
-- An unclassified date defaults to **50%** and can be changed later, including after the day has passed.
-- Set a tracking start date to establish a zero-balance baseline; entries before that date are ignored.
-- The balance is allowed to become negative. For example, taking a day off first creates -1; two 75% days bring it back to zero.
-- Day types are stored by date in SQLite. Only dates from the tracking start date through today are counted. Unclassified eligible dates default to 50%; dates before the baseline and future dates have no status and are excluded. You can change an eligible past date later.
-
-## Dynamic routines
-
-Create recurring blocks for work, sleep, wake-up, calls, gym, reading or any other activity. Each block has a title, category, start/end time, weekday selection, enabled state, selected tone and independent start/end alarm switches. The home dashboard shows the current or next work block, its productive time remaining, pauses, and adjusted finish time. When an enabled non-work activity overlaps a work block, the work clock pauses and the finish time moves later by the activity's duration. For example, an 08:00–16:00 work block with a 10:00–14:00 activity finishes at 20:00, preserving eight hours of actual work. The dashboard also shows day start, bedtime, planned sleep, activity blocks and all configured alarm times with their sound settings. A selected Day Off suppresses work-block alarms. Equal start and end times are treated as an empty block and are not displayed.
-
-## Project layout
-
-| Path | Purpose |
-| --- | --- |
-| `fuzzy_journey/gui.py` | GTK desktop application |
-| `fuzzy_journey/alarm_daemon.py` | Background alarm service |
-| `fuzzy_journey/alarm_engine.py` | Due-time and recurrence logic |
-| `fuzzy_journey/database.py` | SQLite persistence |
-| `fuzzy_journey/notifications.py` | Desktop notification and local sound |
-| `prayer_aio.py` | Original all-in-one prayer/work/sleep planner |
-| `install.sh` / `uninstall.sh` | Linux user installation |
-| `tests/` | Offline unit tests |
-
-## License
-
-MIT. See [LICENSE](LICENSE).
-
-
-## Evening work-block start and pause handling
-
-The evening work-block start defaults to **18:00**, but it is configurable in **Settings → Work schedule**. Choose a time from 14:00 onward and apply it to locally available schedule years. The app rebuilds the derived schedule from the existing raw prayer-time CSV files; it does not need to download prayer data again. Previous derived schedules are backed up. Future year downloads inherit the saved start time. The first work block still has its existing 14:00 limit, so the free interval between the morning block and evening work changes with this setting.
-
-An evening block with no overflow has equal start and end times and is treated as **no block**. It is not rendered as a zero-length shift and does not delay bedtime.
-
-Other enabled activities pause the productive work clock only for the minutes that overlap work. For example, if the generated morning work block is 05:42–12:01 and a recurring call is scheduled from 07:30–08:00, the call pauses work for 30 minutes and the block finishes at 12:31. The dashboard shows the call as the active pause and continues the remaining-work countdown after 08:00. If a call ends exactly when work starts (for example, work starts at 08:00), it does not extend the work block because there is no overlap. The original productive work duration is preserved.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the architecture and [AGENTS.md](AGENTS.md) for the rules that must not break. MIT licensed.

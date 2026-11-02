@@ -1,46 +1,31 @@
-# Contributor notes
+# AGENTS.md
 
-## Project direction
+Rules for anyone (human or AI) changing this repository. Read [PHILOSOPHY.md](PHILOSOPHY.md) first:
+a change that does not serve one of its four ideas probably does not belong.
 
-Fuzzy Journey is a Linux-first desktop daily planner with a local alarm service. The original all-in-one CLI planner remains the source of truth for prayer-time and work/sleep calculations.
+## Do not break
 
-## Important guarantees
+- **The philosophy is the spec.** The arithmetic lives only in `fuzzy_journey/rhythm.py`. The app, the alarm service and the CLI must all use it; never re-implement a rule elsewhere. If you change a rule, change `philosophy.py`, `PHILOSOPHY.md`, `README.md` and the tests in the same commit (`tests/test_docs.py` fails when they drift).
+- **The CLI contract.** `prayer_aio.py` keeps its flags and its output text. Compare old and new output before changing `fuzzy_journey/cli.py`.
+- **The CSV contract.** `*_raw.csv` and `*_schedule.csv` keep their column names and order (`prayer_times.RAW_FIELDNAMES`, `SCHEDULE_FIELDNAMES`), UTF-8 with BOM, `DD-MM-YYYY` dates. `tests/test_prayer_times.py` rebuilds the bundled schedule and requires an exact match.
+- **Existing databases keep working.** Never edit a migration in `database.py`; append a new one and bump nothing else. Keep tables and columns compatible with 1.x.
+- **Alarms ring exactly once.** Claim in a transaction (`alarms.py`) *before* delivering. Keep the five-minute catch-up window, and keep one-time alarms disabling themselves when claimed.
+- **Offline and private.** No telemetry, no accounts. The only network call is downloading a timetable (`prayer_times.fetch_year`).
+- **No GTK in the core.** `rhythm`, `today`, `alarms`, `prayer_times`, `database`, `service`, `sound`, `cli` must import without `gi`. Only `fuzzy_journey/ui/` may use GTK.
+- **Never write to the user's real data folder in tests.** Use `tests/helpers.DbTestCase` or a temp dir.
+- Keep `README.md` accurate: if behaviour, install steps, or flags change, update it in the same change.
 
-- Alarm scheduling and delivery must not make network requests.
-- Alarm definitions and delivery history belong in the local SQLite database under the XDG data directory.
-- The desktop window is not the alarm process. The user systemd service must continue to run when the GUI closes.
-- Claim an alarm in a database transaction before sending notification/audio, so service restarts do not duplicate delivery.
-- Preserve the five-minute catch-up window unless tests and documentation are updated together.
-- A one-time alarm must be disabled after it is claimed.
-- Use the operating system's local timezone for alarm times.
-- Do not imply that software can ring while the computer is powered off or wake hardware from suspend.
+## Style
 
-## Linux integration
+- Python 3.10+, standard library only (PyGObject comes from the system). Type hints on public functions; `from __future__ import annotations`.
+- UI: native libadwaita widgets and theme colours. Custom CSS (`resources/style.css`) is for type and spacing only, never hard-coded colours. Use only APIs available in libadwaita 1.4.
+- Minimalism is a feature. Prefer removing a control to adding one; show an element only when it is relevant.
+- Wording: plain, calm, no exclamation marks, no scores or guilt.
 
-- GUI: GTK 4 and libadwaita via the system Python GI bindings.
-- Background scheduler: Python standard library only.
-- Notifications: `notify-send`; audio fallback order: `paplay`, `pw-play`, then `aplay`.
-- User service: `fuzzy-journey.service`, installed under `~/.config/systemd/user`.
-- The service must not import GTK or libadwaita.
-
-## Existing CLI contract
-
-Develop the prayer/work/sleep calculation logic in `prayer_aio.py`. Keep its current CLI flags and guarantees unless a deliberate compatibility change is documented.
-
-- CSV encoding remains `utf-8-sig`.
-- CSV date format remains `DD-MM-YYYY`.
-- Existing valid CSV files are preserved by default.
-- `--override` backs up existing data before regeneration.
-- Flex time is re-derived from raw rows and must never be incrementally added to an existing schedule.
-- Atomic CSV writes and exact header validation must remain intact.
-
-## Tests
-
-Run:
+## Checks
 
 ```bash
-PYTHONPATH=. python3 -m unittest discover -s tests -v
-python3 -m py_compile fuzzy_journey/*.py prayer_aio.py
+make test       # core unit tests
+make test-ui    # GUI smoke tests under xvfb
+make lint       # ruff
 ```
-
-GUI imports require the Linux GTK 4 / libadwaita GI packages and are intentionally not imported by the alarm-engine unit tests.

@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e2a4a"/>
+      <stop offset="1" stop-color="#3b3f7a"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="28" fill="url(#sky)"/>
+  <!-- the given day: an arc from Fajr to Isha -->
+  <path d="M24 84 A40 40 0 0 1 104 84" fill="none" stroke="#ffffff" stroke-opacity=".18" stroke-width="9" stroke-linecap="round"/>
+  <!-- the share of it given to work -->
+  <path d="M24 84 A40 40 0 0 1 84.4 49.7" fill="none" stroke="#ffcf6e" stroke-width="9" stroke-linecap="round"/>
+  <!-- now -->
+  <circle cx="84.4" cy="49.7" r="7" fill="#fff"/>
+  <!-- the horizon, and the night below it -->
+  <rect x="20" y="96" width="88" height="5" rx="2.5" fill="#ffffff" fill-opacity=".35"/>
+</svg>
