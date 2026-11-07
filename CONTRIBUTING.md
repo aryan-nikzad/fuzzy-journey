@@ -8,6 +8,9 @@ Thanks for helping. Start with [PHILOSOPHY.md](PHILOSOPHY.md) (what the app is f
 fuzzy_journey/
   philosophy.py     the four ideas, as data (shown in the app)
   rhythm.py         THE RULES: day kinds, time bank, day plan, work clock. Pure.
+  pomodoro.py       focus blocks, breaks, planning, pause shifting, pomodoro alarms. Pure.
+  tasks.py          task order, load against focus time, validation. Pure.
+  planner.py        builds a day (shared by the app and the alarm service).
   today.py          builds everything the Today screen shows from the facts. Pure.
   prayer_times.py   read / download / derive timetables (CSV contract)
   alarms.py         when things ring + the "claim once" guarantee

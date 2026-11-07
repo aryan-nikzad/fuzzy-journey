@@ -7,13 +7,14 @@ renders it, so every rule here is covered by plain unit tests.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from . import alarms as alarm_rules
-from .models import Activity, Alarm, PrayerAlarm
+from .models import Activity, Alarm, PrayerAlarm, Sound
+from .pomodoro import ManualPause, PomodoroSettings, Schedule, build_schedule, schedule_events
 from .prayer_times import PrayerDay
 from .rhythm import (
     DEFAULT_EVENING_START,
@@ -100,6 +101,7 @@ class TodayView:
     prayer_marks: tuple[datetime, ...]
     next_alarm: NextAlarm | None = None
     alarm_times: frozenset[datetime] = field(default_factory=frozenset)
+    schedule: Schedule | None = None
 
     @property
     def has_prayer_data(self) -> bool:
@@ -143,6 +145,9 @@ def build_today(
     prayer_alarms: Mapping[str, PrayerAlarm],
     evening_start: time = DEFAULT_EVENING_START,
     flex: timedelta = timedelta(0),
+    pomodoro: PomodoroSettings | None = None,
+    pomodoro_sound: Sound | None = None,
+    pomodoro_pauses: Sequence[ManualPause] = (),
 ) -> TodayView:
     day = now.date()
     activities = [a for a in activities]
@@ -196,6 +201,13 @@ def build_today(
     )
     remaining = sum((w.progress.remaining for w in work), timedelta(0))
 
+    # ---- pomodoro and planning (only when the caller opts in)
+    schedule: Schedule | None = None
+    pomo_events = []
+    if pomodoro is not None:
+        schedule = build_schedule([(w.progress.start, w.progress.planned) for w in work], pauses, pomodoro)
+        pomo_events = schedule_events(schedule, pomodoro_pauses, day, pomodoro_sound or Sound())
+
     # ---- alarms
     reminder_due = {
         r.id: datetime.combine(day, r.clock)
@@ -211,6 +223,7 @@ def build_today(
         )
         if e.due.date() == day
     ]
+    events += [e for e in pomo_events if e.due.date() == day]
     alarm_moments = [*reminder_due.values(), *(e.due for e in events)]
     upcoming = sorted(
         [(reminder_due[r.id], r.title) for r in reminder_list] + [(e.due, e.title) for e in events]
@@ -240,6 +253,11 @@ def build_today(
             detail = f"{_hm(p.start)}–{_hm(p.end)} · {_pretty(p.remaining)} left"
         has_alarm = bool(item.activity and (item.activity.alarm_at_start or item.activity.alarm_at_end))
         add(p.start, p.end, Slot.WORK, item.title, detail, has_alarm)
+
+    if schedule and schedule.planning:
+        p = schedule.planning
+        add(p.start, p.end, Slot.WORK, "Planning",
+            f"{_hm(p.start)}–{_hm(p.end)} · settle today, plan tomorrow", True)
 
     if plan and kind is DayKind.REST:
         add(plan.wake, plan.bedtime, Slot.FREE, "Rest day", "No work today")
@@ -294,7 +312,7 @@ def build_today(
         now=now, day=day, kind=kind, plan=plan, wake=wake, bedtime=bedtime, sleep=sleep,
         sleep_lost=sleep_lost, work=tuple(work), work_remaining=remaining, focus=focus,
         timeline=tuple(rows), segments=tuple(segments), prayer_marks=marks,
-        next_alarm=next_alarm, alarm_times=frozenset(alarm_moments),
+        next_alarm=next_alarm, alarm_times=frozenset(alarm_moments), schedule=schedule,
     )
 
 

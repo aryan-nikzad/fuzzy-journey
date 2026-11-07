@@ -54,8 +54,8 @@ class UiSmokeTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_every_page_renders_and_refreshes(self):
-        self.assertEqual(list(self.window.pages), ["today", "routine", "bank", "alarms", "prayers"])
-        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location"):
+        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers"])
+        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro"):
             self.ctx.changed(scope)
 
     def test_today_shows_the_bundled_day(self):
@@ -101,6 +101,110 @@ class UiSmokeTests(unittest.TestCase):
         bank = self.window.pages["bank"]
         bank._select(date(2026, 11, 2))
         self.assertEqual(bank.day_title.get_text(), "Monday, 2 November 2026")
+
+    # -- pomodoro, tasks, planning ------------------------------------------
+
+    def test_tomorrow_opens_on_tomorrow_and_can_browse_any_day(self):
+        page = self.window.pages["tomorrow"]
+        self.assertEqual(page.selected, date(2026, 11, 3))
+        self.assertIn("TOMORROW", page.overline.get_text())
+        self.assertIn("h", page.hero.get_text())
+        for day in (date(2026, 10, 20), date(2026, 11, 2), date(2026, 12, 1)):  # past, today, future
+            page._go(day)
+            self.assertEqual(page.selected, day)
+            self.assertIn(day.strftime("%A"), page.overline.get_text())
+        page._go(date(2026, 11, 3))
+
+    def test_a_days_tasks_can_never_exceed_its_focus_time(self):
+        from fuzzy_journey.ui.dialogs.task_dialog import TaskDialog
+
+        day = date(2026, 11, 3)
+        focus = self.ctx.day_view(day).schedule.focus_minutes
+        self.assertGreater(focus, 0)
+        ok = TaskDialog(self.window, self.ctx, day, focus)
+        ok.title_row.set_text("Write the chapter")
+        ok.length.set_value(37)  # snaps to a five-minute step
+        self.assertTrue(ok.save())
+        saved = self.ctx.db.tasks_on(day)
+        self.assertEqual([(t.title, t.minutes) for t in saved], [("Write the chapter", 35)])
+        too_long = TaskDialog(self.window, self.ctx, day, focus)
+        too_long.title_row.set_text("Too much")
+        too_long.length.set_value(360)
+        self.assertFalse(too_long.save())
+        self.assertEqual(len(self.ctx.db.tasks_on(day)), 1)
+        for t in saved:
+            self.ctx.db.delete_task(t.id)
+        self.ctx.changed("tasks")
+
+    def test_carrying_a_task_puts_it_on_tomorrows_page(self):
+        from fuzzy_journey.models import Task, TaskStatus
+
+        today, tomorrow = date(2026, 11, 2), date(2026, 11, 3)
+        tid = self.ctx.db.save_task(Task("Unfinished", 45, today))
+        self.window.pages["today"].tasks._set(self.ctx.db.tasks_on(today)[0], TaskStatus.CARRIED)
+        self.assertEqual([t.title for t in self.ctx.db.tasks_on(tomorrow)], ["Unfinished"])
+        self.assertIs(self.ctx.db.tasks_on(tomorrow)[0].status, TaskStatus.UNSET)
+        self.window.pages["today"].tasks._set(self.ctx.db.tasks_on(today)[0], TaskStatus.DONE)
+        self.assertEqual(self.ctx.db.tasks_on(tomorrow), [])
+        self.ctx.db.delete_task(tid)
+        self.ctx.changed("tasks")
+
+    def test_the_pomodoro_can_be_paused_and_resumed(self):
+        today = date(2026, 11, 2)
+        card = self.window.pages["today"].card
+        self.assertTrue(card.get_visible())
+        self.assertEqual(card.pause.get_label(), "Pause")
+        card._on_pause(None)
+        self.assertEqual(self.ctx.db.pomodoro_pauses(today)[0][1], None)
+        self.assertEqual(card.pause.get_label(), "Resume")
+        self.assertEqual(card.overline.get_text(), "PAUSED")
+        card._on_pause(None)
+        self.assertIsNotNone(self.ctx.db.pomodoro_pauses(today)[0][1])
+        self.assertEqual(card.pause.get_label(), "Pause")
+        with self.ctx.db.transaction() as conn:
+            conn.execute("DELETE FROM pomodoro_pauses")
+        self.ctx.changed("pomodoro")
+
+    def test_unsettled_tasks_from_earlier_days_are_reviewed_first(self):
+        from fuzzy_journey.models import Task, TaskStatus
+        from fuzzy_journey.ui.dialogs.review_dialog import ReviewDialog
+
+        stale = Task("Left over", 30, date(2026, 11, 1))
+        self.ctx.db.save_task(stale)
+        self.window._check_tasks()
+        self.assertTrue(self.window.review_banner.get_revealed())
+        dialog = ReviewDialog(self.window, self.ctx, date(2026, 11, 1))
+        self.assertEqual(len(dialog._rows), 1)
+        dialog._settle(stale, TaskStatus.CANCELLED)
+        self.assertEqual(self.ctx.db.unset_tasks_before(date(2026, 11, 2)), [])
+        self.assertFalse(self.window.review_banner.get_revealed())
+        self.ctx.db.delete_task(stale.id)
+
+    def test_focus_preferences_save_and_hide_what_is_off(self):
+        from dataclasses import replace
+
+        from fuzzy_journey.ui.dialogs.preferences import PreferencesWindow
+
+        saved = self.ctx.settings.pomodoro
+        prefs = PreferencesWindow(self.window, self.ctx)
+        try:
+            self.assertTrue(prefs.pomo_on.get_active() and prefs.long_row.get_visible())
+            prefs.long_on.set_active(False)
+            self.assertFalse(self.ctx.settings.pomodoro.long_enabled)
+            self.assertTrue(self.ctx.settings.pomodoro.short_enabled)  # independent switches
+            self.assertFalse(prefs.long_row.get_visible() or prefs.every_row.get_visible())
+            prefs.focus_row.set_value(25)
+            self.assertEqual(self.ctx.settings.pomodoro.focus, 25)
+            prefs.pomo_on.set_active(False)
+            self.assertFalse(prefs.focus_row.get_visible() or prefs.short_on.get_visible())
+            card = self.window.pages["today"].card  # no pomodoro: nothing to pause, planning still comes
+            self.assertFalse(card.pause.get_visible())
+            self.assertIn("Planning", card.detail.get_text())
+        finally:
+            self.ctx.settings.pomodoro = replace(saved)
+            self.ctx.changed("rhythm")
+            prefs.destroy()
+        self.assertEqual(self.ctx.settings.pomodoro, saved)
 
     def test_theme_switch(self):
         from fuzzy_journey.ui.dialogs.preferences import apply_theme

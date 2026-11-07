@@ -48,3 +48,11 @@ row.fj-quiet { min-height: 40px; }
 .fj-idea-number { font-size: 13px; font-weight: 800; min-width: 28px; min-height: 28px; border-radius: 99px;
                   background-color: alpha(@accent_bg_color, .2); color: @accent_color; }
 .fj-day-toggle:checked { background-color: @accent_bg_color; color: @accent_fg_color; }
+
+/* Focus: pomodoro card, tasks */
+.fj-timer { font-size: 44px; font-weight: 800; letter-spacing: -1px; font-feature-settings: "tnum"; }
+row.fj-settled .title { opacity: .5; }
+row.fj-settled:not(.fj-keep) .title { text-decoration: line-through; }
+.fj-meter { min-height: 6px; }
+.fj-meter.fj-warn progress { background-color: @warning_bg_color; }
+label.fj-warn { color: @warning_color; }

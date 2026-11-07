@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 import signal
+import sys
 import threading
 from datetime import datetime, timedelta
 
-from . import alarms, sound
+from . import alarms, planner, pomodoro, sound
 from .database import Database
 from .meta import APP_NAME
 from .paths import DATABASE_PATH
@@ -37,16 +38,26 @@ def due_rings(db: Database, library: PrayerLibrary, now: datetime) -> list[alarm
         activities=db.list_activities(),
         kinds={yesterday: DayKind.STEADY, today: DayKind.STEADY, **kinds},
     )
+    settings = db.settings.pomodoro
+    if settings.enabled or settings.planning_enabled:
+        view = planner.build_view(db, library, now)
+        if view.schedule:
+            events += pomodoro.schedule_events(
+                view.schedule, db.pomodoro_pauses(today), today, db.settings.pomodoro_sound
+            )
     return rings + alarms.claim_due_events(db, events, now)
 
 
 def deliver(ring: alarms.Ring) -> None:
-    sound.notify(f"{APP_NAME} · {ring.title}", ring.message)
+    sound.notify(f"{APP_NAME} · {ring.title}", ring.message, stoppable=ring.sound.enabled)
     if ring.sound.enabled:
         sound.play(ring.sound)
 
 
 def main() -> int:
+    if "--stop" in sys.argv[1:]:  # silence a ringing alarm, e.g. from a keyboard shortcut
+        sound.stop_all()
+        return 0
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     db = Database()
     library = PrayerLibrary()

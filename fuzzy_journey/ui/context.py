@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
-from .. import prayer_times
+from .. import planner, prayer_times
 from ..database import Database
 from ..prayer_times import PrayerLibrary
 from ..rhythm import BankSummary, summarize_bank
 from ..timeutil import now as clock_now
-from ..today import TodayView, build_today
+from ..today import TodayView
 from .gi_setup import Adw, GLib, GObject
 
 
@@ -45,21 +45,11 @@ class Context(GObject.Object):
         return self.settings.location
 
     def today_view(self, now: datetime | None = None) -> TodayView:
-        now = now or clock_now()
-        day = now.date()
-        slug = self.location.slug
-        tomorrow = self.library.day(slug, day + timedelta(days=1))
-        return build_today(
-            now,
-            self.db.day_kind(day),
-            prayer_day=self.library.day(slug, day),
-            next_fajr=tomorrow.fajr if tomorrow else None,
-            activities=self.db.list_activities(),
-            reminders=self.db.list_alarms(),
-            prayer_alarms=self.db.prayer_alarms(),
-            evening_start=self.settings.evening_start,
-            flex=self.settings.flex,
-        )
+        return planner.build_view(self.db, self.library, now or clock_now())
+
+    def day_view(self, day: date) -> TodayView:
+        """Any day's plan: the focus time its tasks may use and its pomodoro schedule."""
+        return planner.view_for_day(self.db, self.library, day)
 
     def bank(self, today: date | None = None) -> BankSummary:
         today = today or clock_now().date()

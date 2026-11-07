@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, time
+from enum import Enum
 from pathlib import Path
 
 from .rhythm import DayKind
@@ -176,3 +177,43 @@ def slugify(name: str) -> str:
     while "--" in slug:
         slug = slug.replace("--", "-")
     return slug.strip("-") or "home"
+
+
+# --------------------------------------------------------------------------
+# Tasks
+# --------------------------------------------------------------------------
+
+
+class TaskStatus(Enum):
+    """Where a task stands. A task starts ``UNSET`` and the user settles it."""
+
+    UNSET = "unset"
+    DONE = "done"
+    CANCELLED = "cancelled"  # never needs doing
+    CARRIED = "carried"  # not done in time; a copy waits on the next day
+
+    @property
+    def label(self) -> str:
+        return {"unset": "Not set", "done": "Done", "cancelled": "Cancelled",
+                "carried": "Carried over"}[self.value]
+
+
+TASK_LEVELS = {1: "High", 2: "Normal", 3: "Low"}
+
+
+@dataclass
+class Task:
+    """Something to do on one day. Tasks belong to their day; only a status moves them on."""
+
+    title: str
+    minutes: int
+    day: date
+    level: int = 2  # 1 High, 2 Normal, 3 Low; used by the "by importance" order
+    position: int = 0  # used by the "my order" order
+    status: TaskStatus = TaskStatus.UNSET
+    origin_id: int | None = None  # the task this one was carried over from
+    id: int | None = None
+
+    @property
+    def level_label(self) -> str:
+        return TASK_LEVELS.get(self.level, "Normal")

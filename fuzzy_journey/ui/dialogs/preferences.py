@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from ...meta import APP_NAME
 from ...models import CALCULATION_METHODS, Location
 from ...paths import APP_DATA_DIR, ensure_data_dir
+from ...pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE
+from ...tasks import ORDER_MODES
 from ..context import Context
 from ..gi_setup import Adw, Gio, Gtk
+from ..widgets import SoundEditor
 
 THEMES = ("system", "light", "dark")
 
@@ -23,8 +27,9 @@ class PreferencesWindow(Adw.PreferencesWindow):
         super().__init__(transient_for=parent, modal=True, title="Preferences", default_width=560, default_height=680)
         self.ctx = ctx
         self.set_search_enabled(False)
-        page = Adw.PreferencesPage()
+        page = Adw.PreferencesPage(title="General", icon_name="preferences-system-symbolic")
         self.add(page)
+        self._focus_page()
 
         # -- appearance
         look = Adw.PreferencesGroup(title="Appearance")
@@ -99,6 +104,95 @@ class PreferencesWindow(Adw.PreferencesWindow):
             activatable=False,
         ))
         page.add(store)
+
+    # -- focus -------------------------------------------------------------
+
+    def _focus_page(self) -> None:
+        page = Adw.PreferencesPage(title="Focus", icon_name="alarm-symbolic")
+        self.add(page)
+        ctx = self.ctx
+        p = ctx.settings.pomodoro
+
+        def spin(title, rng, value, step=1):
+            row = Adw.SpinRow.new_with_range(rng[0], rng[1], step)
+            row.set_title(title)
+            row.set_snap_to_ticks(True)
+            row.set_value(value)
+            row.connect("notify::value", self._on_focus_changed)
+            return row
+
+        def switch(title, subtitle, value):
+            row = Adw.SwitchRow(title=title, subtitle=subtitle)
+            row.set_active(value)
+            row.connect("notify::active", self._on_focus_changed)
+            return row
+
+        pomo = Adw.PreferencesGroup(
+            title="Pomodoro",
+            description="Work is cut into focus blocks and breaks, with an alarm at each change.",
+        )
+        self.pomo_on = switch("Use pomodoro", "Turn it off to work in one stretch.", p.enabled)
+        self.focus_row = spin("Focus block (minutes)", FOCUS_RANGE, p.focus, 5)
+        self.short_on = switch("Short breaks", "A pause between focus blocks.", p.short_enabled)
+        self.short_row = spin("Short break (minutes)", SHORT_RANGE, p.short)
+        self.long_on = switch("Long breaks", "A longer pause after several focus blocks.", p.long_enabled)
+        self.long_row = spin("Long break (minutes)", LONG_RANGE, p.long, 5)
+        self.every_row = spin("Long break after (focus blocks)", EVERY_RANGE, p.long_every)
+        self._pomo_rows = [
+            (self.focus_row, lambda q: q.pomo_on.get_active()),
+            (self.short_on, lambda q: q.pomo_on.get_active()),
+            (self.short_row, lambda q: q.pomo_on.get_active() and q.short_on.get_active()),
+            (self.long_on, lambda q: q.pomo_on.get_active()),
+            (self.long_row, lambda q: q.pomo_on.get_active() and q.long_on.get_active()),
+            (self.every_row, lambda q: q.pomo_on.get_active() and q.long_on.get_active()),
+        ]
+        for row in (self.pomo_on, *(r for r, _ in self._pomo_rows)):
+            pomo.add(row)
+        page.add(pomo)
+
+        ring = Adw.PreferencesGroup(title="Pomodoro alarm", description="Rings when a block or a break begins.")
+        self.pomo_sound = SoundEditor(ctx.settings.pomodoro_sound, self._on_pomo_sound)
+        for row in self.pomo_sound.rows:
+            ring.add(row)
+        page.add(ring)
+
+        plan = Adw.PreferencesGroup(title="Planning and tasks")
+        self.planning_on = switch(
+            "End the day with planning",
+            "The last 30 minutes of work are kept for settling today’s tasks and planning tomorrow.",
+            p.planning_enabled,
+        )
+        plan.add(self.planning_on)
+        self.order_row = Adw.ComboRow(title="Order tasks", subtitle="How you decide what comes first.")
+        self.order_row.set_model(Gtk.StringList.new(["In my own order", "By importance"]))
+        self.order_row.set_selected(ORDER_MODES.index(ctx.settings.task_order))
+        self.order_row.connect("notify::selected", self._on_order)
+        plan.add(self.order_row)
+        page.add(plan)
+        self._sync_focus_rows()
+
+    def _sync_focus_rows(self) -> None:
+        for row, visible in self._pomo_rows:
+            row.set_visible(visible(self))
+
+    def _on_focus_changed(self, *_args) -> None:
+        settings = self.ctx.settings
+        settings.pomodoro = replace(
+            settings.pomodoro,
+            enabled=self.pomo_on.get_active(), focus=int(self.focus_row.get_value()),
+            short_enabled=self.short_on.get_active(), short=int(self.short_row.get_value()),
+            long_enabled=self.long_on.get_active(), long=int(self.long_row.get_value()),
+            long_every=int(self.every_row.get_value()), planning_enabled=self.planning_on.get_active(),
+        )
+        self._sync_focus_rows()
+        self.ctx.changed("rhythm")
+
+    def _on_pomo_sound(self, sound) -> None:
+        self.ctx.settings.pomodoro_sound = sound
+
+    def _on_order(self, row, _pspec) -> None:
+        self.ctx.settings.task_order = ORDER_MODES[row.get_selected()]
+        self.ctx.changed("tasks")
 
     # -- handlers ----------------------------------------------------------
 

@@ -7,12 +7,16 @@ This module must stay importable without GTK: the alarm service uses it.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
+import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
+import threading
 import wave
 from pathlib import Path
 
@@ -112,6 +116,72 @@ def has_player_for(path: str | Path | None) -> bool:
     return _player_command(Path(path) if path else ensure_tone()) is not None
 
 
+# --------------------------------------------------------------------------
+# Stopping a ringing alarm
+#
+# The alarm service plays sounds in its own process, but the app (a button) and
+# a notification action must be able to stop them. Every player's pid and file
+# is recorded in a small file in the data folder; anyone can read it and stop them.
+# --------------------------------------------------------------------------
+
+RINGING_FILE = APP_DATA_DIR / "ringing.json"
+_children: list[subprocess.Popen] = []
+
+
+def _read_ringing() -> list[dict]:
+    try:
+        data = json.loads(RINGING_FILE.read_text(encoding="utf-8"))
+        return [d for d in data if isinstance(d, dict) and isinstance(d.get("pid"), int)]
+    except (OSError, ValueError):
+        return []
+
+
+def _write_ringing(entries: list[dict]) -> None:
+    try:
+        ensure_data_dir()
+        tmp = RINGING_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(entries), encoding="utf-8")
+        tmp.replace(RINGING_FILE)
+    except OSError as exc:
+        log.warning("Could not record the playing alarm: %s", exc)
+
+
+def _is_ours(entry: dict) -> bool:
+    """True while that pid is still the player we started (guards against pid reuse and zombies)."""
+    try:
+        cmdline = Path(f"/proc/{entry['pid']}/cmdline").read_bytes().decode(errors="replace")
+    except OSError:
+        return False
+    return bool(cmdline) and str(entry.get("file", "")) in cmdline
+
+
+def is_ringing() -> bool:
+    """Is an alarm sound playing right now? Cheap enough to poll every second or two."""
+    for child in _children[:]:  # reap finished players so they do not linger as zombies
+        if child.poll() is not None:
+            _children.remove(child)
+    entries = _read_ringing()
+    alive = [e for e in entries if _is_ours(e)]
+    if len(alive) != len(entries):
+        _write_ringing(alive)
+    return bool(alive)
+
+
+def stop_all() -> bool:
+    """Silence every alarm sound. Safe to call from the app, the service or a notification."""
+    stopped = False
+    for entry in _read_ringing():
+        if not _is_ours(entry):
+            continue
+        try:
+            os.killpg(entry["pid"], signal.SIGTERM)  # players run in their own session
+            stopped = True
+        except (ProcessLookupError, PermissionError):
+            pass
+    _write_ringing([])
+    return stopped
+
+
 def play(sound: Sound) -> bool:
     """Start playing ``sound`` in the background. Returns False if nothing could play."""
     if not sound.enabled:
@@ -124,22 +194,57 @@ def play(sound: Sound) -> bool:
         log.warning("No audio player found for %s", target.name)
         return False
     try:
-        subprocess.Popen(
+        child = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
+        _children.append(child)
+        _write_ringing([*(e for e in _read_ringing() if _is_ours(e)), {"pid": child.pid, "file": str(target)}])
         return True
     except OSError as exc:
         log.warning("Could not start audio player: %s", exc)
         return False
 
 
-def notify(title: str, message: str) -> bool:
+_ACTIONS: bool | None = None
+
+
+def _supports_actions(command: str) -> bool:
+    """Does this notify-send have a Stop button (libnotify 0.8+)?"""
+    global _ACTIONS
+    if _ACTIONS is None:
+        try:
+            out = subprocess.run([command, "--help"], capture_output=True, text=True, timeout=5)
+            _ACTIONS = "--action" in out.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            _ACTIONS = False
+    return _ACTIONS
+
+
+def _notify_with_stop(command: str, title: str, message: str) -> None:
+    """Show the notification with a Stop button; pressing it silences the alarm."""
+    try:
+        done = subprocess.run(
+            [command, f"--app-name={APP_NAME}", "--urgency=critical", "--action=stop=Stop alarm",
+             title, message],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        if done.stdout.strip() == "stop":
+            stop_all()
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def notify(title: str, message: str, *, stoppable: bool = False) -> bool:
+    """A desktop notification. ``stoppable`` adds a Stop button where the desktop supports it."""
     command = shutil.which("notify-send")
     if not command:
         return False
+    if stoppable and _supports_actions(command):
+        threading.Thread(target=_notify_with_stop, args=(command, title, message), daemon=True).start()
+        return True
     try:
         subprocess.run(
             [command, f"--app-name={APP_NAME}", "--urgency=critical", "--expire-time=15000", title, message],

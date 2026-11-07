@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
-from datetime import date
+from datetime import date, timedelta
 
+from .. import sound
 from ..meta import APP_NAME
+from ..timeutil import now as clock_now
 from . import service_control
 from .context import Context
 from .dialogs.preferences import apply_theme
-from .gi_setup import Adw, GLib, Gtk
+from .gi_setup import Adw, GLib, GObject, Gtk
 from .pages.base import Page
 
 TICK_SECONDS = 15
@@ -24,15 +26,24 @@ class MainWindow(Adw.ApplicationWindow):
         self.stack = Adw.ViewStack(vexpand=True)
         self._build_pages()
 
-        self.switcher = Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE)
+        # Tabs in the header when they fit, in a bar at the bottom when the window is narrow.
+        self.switcher = Adw.ViewSwitcherTitle(stack=self.stack, title=APP_NAME)
+        self.switcher_bar = Adw.ViewSwitcherBar(stack=self.stack)
+        self.switcher.bind_property("title-visible", self.switcher_bar, "reveal", GObject.BindingFlags.SYNC_CREATE)
         header = Adw.HeaderBar(title_widget=self.switcher)
         header.pack_end(self._menu_button())
 
         self.banner = Adw.Banner(title="Alarms won’t ring: the alarm service isn’t running.", button_label="Start")
         self.banner.connect("button-clicked", self._start_service)
 
+        self.ring_banner = Adw.Banner(title="An alarm is ringing", button_label="Stop")
+        self.ring_banner.connect("button-clicked", lambda _b: self.stop_alarm())
+        self.review_banner = Adw.Banner(button_label="Settle")
+        self.review_banner.connect("button-clicked", lambda _b: self.review_tasks())
+
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        body.append(self.banner)
+        for banner in (self.ring_banner, self.review_banner, self.banner):
+            body.append(banner)
         body.append(self.stack)
 
         self.toasts = Adw.ToastOverlay(child=body)
@@ -41,6 +52,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         view = Adw.ToolbarView(content=self.toasts)
         view.add_top_bar(header)
+        view.add_bottom_bar(self.switcher_bar)
         self.set_content(view)
 
         start_page = os.environ.get("FUZZY_JOURNEY_PAGE")  # used by scripts/screenshots.sh
@@ -51,12 +63,15 @@ class MainWindow(Adw.ApplicationWindow):
         if not self.ctx.settings.welcome_seen:
             GLib.idle_add(self._welcome)
         GLib.timeout_add_seconds(TICK_SECONDS, self._tick)
+        GLib.timeout_add_seconds(1, self._watch_alarm)
         self._check_service()
+        self._check_tasks(prompt=True)
 
     # -- pages -------------------------------------------------------------
 
     PAGES = (
         ("today", "Today", "weather-clear-symbolic"),
+        ("tomorrow", "Tomorrow", "daytime-sunrise-symbolic"),
         ("routine", "Routine", "view-list-symbolic"),
         ("bank", "Bank", "x-office-calendar-symbolic"),
         ("alarms", "Alarms", "alarm-symbolic"),
@@ -69,8 +84,9 @@ class MainWindow(Adw.ApplicationWindow):
         from .pages.prayers import PrayersPage
         from .pages.routine import RoutinePage
         from .pages.today import TodayPage
+        from .pages.tomorrow import TomorrowPage
 
-        factories = {"today": TodayPage, "routine": RoutinePage, "bank": BankPage,
+        factories = {"today": TodayPage, "tomorrow": TomorrowPage, "routine": RoutinePage, "bank": BankPage,
                      "alarms": AlarmsPage, "prayers": PrayersPage}
         for name, title, icon in self.PAGES:
             page = factories[name](self.ctx)
@@ -101,14 +117,43 @@ class MainWindow(Adw.ApplicationWindow):
                 page.refresh()
         if scope in ("alarms", "all"):
             self._check_service()
+        if scope in ("tasks", "all"):
+            self._check_tasks()
 
     def _tick(self) -> bool:
         if date.today() != self._today:
             self._today = date.today()
             self.ctx.changed("all")
+            self._check_tasks(prompt=True)
         else:
             self.ctx.changed("tick")
         self._check_service()
+        return GLib.SOURCE_CONTINUE
+
+    # -- tasks and alarms --------------------------------------------------
+
+    def _check_tasks(self, prompt: bool = False) -> None:
+        """Yesterday's tasks must be settled before today's plan means anything."""
+        waiting = self.ctx.db.unset_tasks_before(clock_now().date())
+        n = len(waiting)
+        self.review_banner.set_title(
+            f"{n} task from an earlier day needs a status" if n == 1 else f"{n} tasks from earlier days need a status"
+        )
+        self.review_banner.set_revealed(n > 0)
+        if prompt and n and self.ctx.settings.welcome_seen:
+            GLib.idle_add(lambda: (self.review_tasks(), GLib.SOURCE_REMOVE)[1])
+
+    def review_tasks(self) -> None:
+        from .dialogs.review_dialog import ReviewDialog
+
+        ReviewDialog(self, self.ctx, clock_now().date() - timedelta(days=1)).present()
+
+    def stop_alarm(self) -> None:
+        sound.stop_all()
+        self.ring_banner.set_revealed(False)
+
+    def _watch_alarm(self) -> bool:
+        self.ring_banner.set_revealed(sound.is_ringing())
         return GLib.SOURCE_CONTINUE
 
     # -- service banner ----------------------------------------------------

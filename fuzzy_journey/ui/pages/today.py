@@ -5,6 +5,7 @@ from ...timeutil import countdown, human_duration
 from ...timeutil import now as clock_now
 from ...today import RowState, Slot, TodayView
 from ..context import Context
+from ..focus import FocusCard, TaskList
 from ..gi_setup import Adw, Gtk
 from ..widgets import DayBar, KindSelector, clear, label
 from .base import Page
@@ -18,7 +19,7 @@ _STATUS = {
 
 
 class TodayPage(Page):
-    listens_to = frozenset({"tick", "day", "rhythm", "alarms", "data", "location"})
+    listens_to = frozenset({"tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro"})
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
@@ -59,6 +60,10 @@ class TodayPage(Page):
             hero.append(w)
         self.day_box.append(hero)
 
+        # -- what to do right now
+        self.card = FocusCard(ctx)
+        self.day_box.append(self.card)
+
         # -- shape of the day
         shape = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.bar = DayBar()
@@ -80,6 +85,10 @@ class TodayPage(Page):
         self.summary = label("", "caption", "dim-label", wrap=True, xalign=0.5)
         kind_box.append(self.summary)
         self.day_box.append(kind_box)
+
+        # -- tasks
+        self.tasks = TaskList(ctx)
+        self.day_box.append(self.tasks)
 
         # -- timeline
         self.timeline = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
@@ -128,7 +137,9 @@ class TodayPage(Page):
         self.stack.set_visible_child_name("day")
         self._render_header(view)
         self._render_hero(view)
+        self.card.update(view.schedule, view.day)
         self._render_shape(view)
+        self.tasks.show_day(view.day, view.schedule.focus_minutes if view.schedule else 0)
         self._render_timeline(view)
 
     def _render_header(self, view: TodayView) -> None:

@@ -15,6 +15,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from .models import (
+    SOUND_PRESETS,
     Activity,
     Alarm,
     DayEntry,
@@ -22,12 +23,16 @@ from .models import (
     Location,
     PrayerAlarm,
     Sound,
+    Task,
+    TaskStatus,
 )
 from .paths import DATABASE_PATH, ensure_data_dir
+from .pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE, ManualPause, PomodoroSettings
 from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
+from .tasks import ORDER_MODES, ORDER_SEQUENCE
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _now_iso() -> str:
@@ -135,8 +140,36 @@ def _migrate_to_v1(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v2(conn: sqlite3.Connection) -> None:
+    """Tasks, and the manual pauses of a day's pomodoro."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS tasks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_date TEXT NOT NULL,
+            title TEXT NOT NULL,
+            minutes INTEGER NOT NULL,
+            level INTEGER NOT NULL DEFAULT 2,
+            position INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'unset',
+            origin_id INTEGER,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_day ON tasks(day_date);
+
+        CREATE TABLE IF NOT EXISTS pomodoro_pauses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_date TEXT NOT NULL,
+            paused_at TEXT NOT NULL,
+            resumed_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_pomodoro_pauses_day ON pomodoro_pauses(day_date);
+        """
+    )
+
+
 #: Append new migrations here; never edit an old one.
-MIGRATIONS = (_migrate_to_v1,)
+MIGRATIONS = (_migrate_to_v1, _migrate_to_v2)
 
 
 # --------------------------------------------------------------------------
@@ -429,6 +462,128 @@ class Database:
         return entry.kind if entry else DayKind.STEADY
 
 
+    # -- tasks -------------------------------------------------------------
+
+    @staticmethod
+    def _task(row: sqlite3.Row) -> Task:
+        return Task(
+            title=row["title"], minutes=row["minutes"], day=date.fromisoformat(row["day_date"]),
+            level=row["level"], position=row["position"], status=TaskStatus(row["status"]),
+            origin_id=row["origin_id"], id=row["id"],
+        )
+
+    def tasks_on(self, day: date) -> list[Task]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE day_date=? ORDER BY position, id", (day.isoformat(),)
+            ).fetchall()
+        return [self._task(r) for r in rows]
+
+    def unset_tasks_before(self, day: date) -> list[Task]:
+        """Tasks from earlier days that still have no status."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM tasks WHERE day_date<? AND status='unset' ORDER BY day_date, position, id",
+                (day.isoformat(),),
+            ).fetchall()
+        return [self._task(r) for r in rows]
+
+    def save_task(self, task: Task) -> int:
+        with self.transaction() as conn:
+            if task.id is None:
+                position = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE day_date=?",
+                    (task.day.isoformat(),),
+                ).fetchone()[0]
+                cursor = conn.execute(
+                    """INSERT INTO tasks(day_date, title, minutes, level, position, status, origin_id, created_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (task.day.isoformat(), task.title.strip(), task.minutes, task.level, position,
+                     task.status.value, task.origin_id, _now_iso()),
+                )
+                task.id, task.position = int(cursor.lastrowid), position
+            else:
+                conn.execute(
+                    "UPDATE tasks SET title=?, minutes=?, level=? WHERE id=?",
+                    (task.title.strip(), task.minutes, task.level, task.id),
+                )
+        return int(task.id)
+
+    def delete_task(self, task_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM tasks WHERE origin_id=? AND status='unset'", (task_id,))
+            conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+
+    def move_task(self, task: Task, direction: int, siblings: list[Task]) -> None:
+        """Swap ``task`` with its neighbour in ``siblings`` (already in display order)."""
+        ids = [t.id for t in siblings]
+        if task.id not in ids:
+            return
+        i, j = ids.index(task.id), ids.index(task.id) + direction
+        if not 0 <= j < len(ids):
+            return
+        order = list(siblings)
+        order[i], order[j] = order[j], order[i]
+        with self.transaction() as conn:
+            for position, item in enumerate(order):
+                conn.execute("UPDATE tasks SET position=? WHERE id=?", (position, item.id))
+
+    def set_task_status(self, task_id: int, status: TaskStatus, today: date | None = None) -> None:
+        """Settle a task. ``CARRIED`` puts a copy on the next day (never in the past, so on ``today``
+        if the task is older than yesterday); changing it back removes the copy."""
+        with self.transaction() as conn:
+            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if row is None:
+                return
+            task = self._task(row)
+            conn.execute("UPDATE tasks SET status=? WHERE id=?", (status.value, task_id))
+            if status is TaskStatus.CARRIED and task.status is not TaskStatus.CARRIED:
+                target = task.day + timedelta(days=1)
+                tomorrow = max(target, today).isoformat() if today else target.isoformat()
+                position = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE day_date=?", (tomorrow,)
+                ).fetchone()[0]
+                conn.execute(
+                    """INSERT INTO tasks(day_date, title, minutes, level, position, status, origin_id, created_at)
+                       VALUES (?, ?, ?, ?, ?, 'unset', ?, ?)""",
+                    (tomorrow, task.title, task.minutes, task.level, position, task_id, _now_iso()),
+                )
+            elif task.status is TaskStatus.CARRIED and status is not TaskStatus.CARRIED:
+                conn.execute("DELETE FROM tasks WHERE origin_id=? AND status='unset'", (task_id,))
+
+    # -- pomodoro pauses ---------------------------------------------------
+
+    def pomodoro_pauses(self, day: date) -> list[ManualPause]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT paused_at, resumed_at FROM pomodoro_pauses WHERE day_date=? ORDER BY paused_at",
+                (day.isoformat(),),
+            ).fetchall()
+        return [
+            (datetime.fromisoformat(r["paused_at"]),
+             datetime.fromisoformat(r["resumed_at"]) if r["resumed_at"] else None)
+            for r in rows
+        ]
+
+    def pause_pomodoro(self, day: date, at: datetime) -> None:
+        with self.transaction(immediate=True) as conn:
+            open_ = conn.execute(
+                "SELECT 1 FROM pomodoro_pauses WHERE day_date=? AND resumed_at IS NULL", (day.isoformat(),)
+            ).fetchone()
+            if not open_:
+                conn.execute(
+                    "INSERT INTO pomodoro_pauses(day_date, paused_at) VALUES (?, ?)",
+                    (day.isoformat(), at.isoformat(timespec="seconds")),
+                )
+
+    def resume_pomodoro(self, day: date, at: datetime) -> None:
+        with self.transaction(immediate=True) as conn:
+            conn.execute(
+                "UPDATE pomodoro_pauses SET resumed_at=? WHERE day_date=? AND resumed_at IS NULL",
+                (at.isoformat(timespec="seconds"), day.isoformat()),
+            )
+
+
 # --------------------------------------------------------------------------
 # Settings
 # --------------------------------------------------------------------------
@@ -489,6 +644,65 @@ class Settings:
     @flex.setter
     def flex(self, value: timedelta) -> None:
         self.set("flex_time", duration_hhmm(value))
+
+    # focus: pomodoro, planning and tasks -----------------------------------
+
+    def _flag(self, key: str, default: bool) -> bool:
+        return self.get(key, "1" if default else "0") == "1"
+
+    def _number(self, key: str, default: int, low: int, high: int) -> int:
+        try:
+            return min(high, max(low, int(self.get(key, str(default)))))
+        except ValueError:
+            return default
+
+    @property
+    def pomodoro(self) -> PomodoroSettings:
+        d = PomodoroSettings()
+        return PomodoroSettings(
+            enabled=self._flag("pomo_enabled", d.enabled),
+            focus=self._number("pomo_focus", d.focus, *FOCUS_RANGE),
+            short_enabled=self._flag("pomo_short_enabled", d.short_enabled),
+            short=self._number("pomo_short", d.short, *SHORT_RANGE),
+            long_enabled=self._flag("pomo_long_enabled", d.long_enabled),
+            long=self._number("pomo_long", d.long, *LONG_RANGE),
+            long_every=self._number("pomo_long_every", d.long_every, *EVERY_RANGE),
+            planning_enabled=self._flag("planning_enabled", d.planning_enabled),
+        )
+
+    @pomodoro.setter
+    def pomodoro(self, v: PomodoroSettings) -> None:
+        for key, value in (
+            ("pomo_enabled", int(v.enabled)), ("pomo_focus", v.focus),
+            ("pomo_short_enabled", int(v.short_enabled)), ("pomo_short", v.short),
+            ("pomo_long_enabled", int(v.long_enabled)), ("pomo_long", v.long),
+            ("pomo_long_every", v.long_every), ("planning_enabled", int(v.planning_enabled)),
+        ):
+            self.set(key, str(value))
+
+    @property
+    def pomodoro_sound(self) -> Sound:
+        key = self.get("pomo_sound_key", "classic")
+        return Sound(
+            enabled=self._flag("pomo_sound_enabled", True),
+            key=key if key in SOUND_PRESETS else "classic",
+            custom_path=self.get("pomo_sound_path", "") or None,
+        )
+
+    @pomodoro_sound.setter
+    def pomodoro_sound(self, v: Sound) -> None:
+        self.set("pomo_sound_enabled", "1" if v.enabled else "0")
+        self.set("pomo_sound_key", v.key)
+        self.set("pomo_sound_path", v.custom_path or "")
+
+    @property
+    def task_order(self) -> str:
+        value = self.get("task_order", ORDER_SEQUENCE)
+        return value if value in ORDER_MODES else ORDER_SEQUENCE
+
+    @task_order.setter
+    def task_order(self, value: str) -> None:
+        self.set("task_order", value)
 
     # time bank ------------------------------------------------------------
 

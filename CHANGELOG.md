@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Focus
+- **Pomodoro.** Each day's work is cut into focus blocks and breaks, with an alarm at every change. Defaults: 50 minute focus, 10 minute short break, 30 minute long break after three focus blocks. Block length, both break lengths and how often the long break comes are adjustable; short breaks, long breaks and pomodoro itself can each be switched off (pomodoro is on by default).
+- **Pause and resume** the running block (a glass of water): everything after it moves later by the length of the pause, and nothing rings while paused.
+- **Planning.** The last 30 minutes of the day's work are kept for settling today's tasks and planning tomorrow. On by default; can be switched off.
+- **Tasks.** A title, a length (5 to 360 minutes in steps of 5) and a status: not set, done, cancelled, or moved to tomorrow, which puts a copy on the next day. Tasks belong to their day; only that status moves one on. Order them by hand or by importance (High, Normal, Low) in Preferences → Focus.
+- A day's tasks can never add up to more than its focus time, and the meter turns amber past the recommended 90%.
+- **Tomorrow** screen with a date picker to plan, or look back at, any day.
+- Tasks from earlier days that still have no status are put in front of you first, as a banner and a dialog, before the new day begins.
+- **Stop a ringing alarm** (azan, a custom sound, anything) from a Stop button in the app, from the notification's *Stop alarm* action, with `Ctrl+.`, or with `python3 -m fuzzy_journey.service --stop`.
+
+### Changed
+- Screens are now Today, Tomorrow, Routine, Bank, Alarms, Prayers (`Ctrl+1`…`Ctrl+6`). The tab switcher moves to a bottom bar when the window is too narrow for six tabs.
+- Database schema 2 adds the `tasks` and `pomodoro_pauses` tables. Existing data is untouched.
+
 ## 2.0.0
 
 A ground-up refactor and redesign. Your data, alarms, and the `prayer_aio.py` command line carry over unchanged.

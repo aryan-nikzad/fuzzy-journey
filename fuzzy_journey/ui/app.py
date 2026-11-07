@@ -24,7 +24,8 @@ class Application(Adw.Application):
         self._add_action("philosophy", self._philosophy, "F1")
         self._add_action("about", self._about)
         self._add_action("quit", lambda *_: self.quit(), "<Ctrl>q")
-        for index in range(5):
+        self._add_action("stop-alarm", lambda *_: self.window and self.window.stop_alarm(), "<Ctrl>period")
+        for index in range(6):
             self._add_action(f"page-{index}", lambda *_, i=index: self.window and self.window.page_index(i), f"<Ctrl>{index + 1}")
 
     def _add_action(self, name: str, callback, accel: str | None = None) -> None:
