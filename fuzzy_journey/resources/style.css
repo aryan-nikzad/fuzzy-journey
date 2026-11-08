@@ -31,6 +31,7 @@ row.fj-quiet { min-height: 40px; }
 .fj-day:hover { background-color: alpha(currentColor, .08); }
 .fj-day.fj-day-push { background-color: alpha(@accent_bg_color, .28); }
 .fj-day.fj-day-rest { background-color: alpha(@warning_bg_color, .32); }
+.fj-day.fj-day-recovered { box-shadow: inset 0 0 0 1px alpha(@accent_color, .55); }
 .fj-day.fj-day-today { font-weight: 800; box-shadow: inset 0 0 0 2px alpha(currentColor, .35); }
 .fj-day.fj-day-selected { background-color: @accent_bg_color; color: @accent_fg_color; }
 .fj-weekday { font-size: 11px; font-weight: 700; opacity: .5; }

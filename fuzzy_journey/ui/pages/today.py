@@ -84,6 +84,36 @@ class TodayPage(Page):
         kind_box.append(self.selector)
         self.summary = label("", "caption", "dim-label", wrap=True, xalign=0.5)
         kind_box.append(self.summary)
+        self.extras = Gtk.Box(halign=Gtk.Align.CENTER, spacing=6)
+        self.overslept = Gtk.Button(label="I overslept…", tooltip_text="Start the day later")
+        self.overslept.connect("clicked", lambda _b: self._recover(None))
+        self.night_button = Gtk.Button(label="Work into the night…", tooltip_text="Not recommended")
+        self.night_button.connect("clicked", lambda _b: self._night(0))
+        for b in (self.overslept, self.night_button):
+            b.add_css_class("flat")
+            b.add_css_class("caption")
+            self.extras.append(b)
+        kind_box.append(self.extras)
+        self.recovered = Adw.ActionRow(title="Recovered day", activatable=False)
+        self.recovered.add_css_class("card")
+        change = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
+        undo = Gtk.Button(label="Undo", valign=Gtk.Align.CENTER, tooltip_text="Back to a Steady day")
+        change.connect("clicked", lambda _b: self._recover(self._start))
+        undo.connect("clicked", self._on_undo)
+        self.recovered.add_suffix(change)
+        self.recovered.add_suffix(undo)
+        kind_box.append(self.recovered)
+        self.night_row = Adw.ActionRow(title="Night work", activatable=False)
+        self.night_row.add_css_class("card")
+        night_change = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
+        night_remove = Gtk.Button(label="Remove", valign=Gtk.Align.CENTER, tooltip_text="Sleep instead")
+        night_change.connect("clicked", lambda _b: self._night(self._overtime))
+        night_remove.connect("clicked", self._on_remove_night)
+        self.night_row.add_suffix(night_change)
+        self.night_row.add_suffix(night_remove)
+        kind_box.append(self.night_row)
+        self._start = None
+        self._overtime = 0
         self.day_box.append(kind_box)
 
         # -- tasks
@@ -109,6 +139,26 @@ class TodayPage(Page):
         day = clock_now().date()
         existing = self.ctx.db.day_entries(day, day).get(day)
         self.ctx.db.set_day_kind(day, DayKind.from_code(code), existing.note if existing else "")
+        self.ctx.changed("day")
+
+    def _recover(self, current) -> None:
+        from ..dialogs.recovered_dialog import RecoveredDialog
+
+        RecoveredDialog(self.get_root(), self.ctx, clock_now().date(), current).present()
+
+    def _night(self, current: int) -> None:
+        from ..dialogs.overtime_dialog import OvertimeDialog
+
+        OvertimeDialog(self.get_root(), self.ctx, clock_now().date(), current).present()
+
+    def _on_remove_night(self, _button) -> None:
+        self.ctx.db.set_day_overtime(clock_now().date(), 0)
+        self.ctx.changed("day")
+
+    def _on_undo(self, _button) -> None:
+        day = clock_now().date()
+        existing = self.ctx.db.day_entries(day, day).get(day)
+        self.ctx.db.set_day_kind(day, DayKind.STEADY, existing.note if existing else "")
         self.ctx.changed("day")
 
     def _download(self, button: Gtk.Button) -> None:
@@ -149,6 +199,24 @@ class TodayPage(Page):
         self.bank_button.set_label(f"Bank {balance} d")
         self.bank_button.set_tooltip_text("Rest banked from Push days. Open the bank.")
         self.selector.set_kind(view.kind)
+        recovered = view.kind is DayKind.RECOVERED
+        entry = self.ctx.db.day_entries(view.day, view.day).get(view.day)
+        self._start = entry.start if entry else None
+        self.selector.set_visible(not recovered)
+        self.recovered.set_visible(recovered and view.plan is not None)
+        self.overslept.set_visible(view.kind is DayKind.STEADY and view.plan is not None)
+        self._overtime = entry.overtime if entry else 0
+        night = view.plan.overtime if view.plan else None
+        self.night_button.set_visible(view.plan is not None and view.kind is not DayKind.REST and not night)
+        self.night_row.set_visible(night is not None)
+        self.extras.set_visible(self.overslept.get_visible() or self.night_button.get_visible())
+        if night:
+            lost = f" · {human_duration(view.sleep_lost)} of sleep given up" if view.sleep_lost.total_seconds() > 0 else ""
+            self.night_row.set_subtitle(
+                f"{night.start:%H:%M}–{night.end:%H:%M} · not recommended · bed {view.bedtime:%H:%M}{lost}"
+            )
+        if recovered and view.plan:
+            self.recovered.set_subtitle(f"Started {view.plan.wake:%H:%M} · half of the time you are awake")
 
     def _render_hero(self, view: TodayView) -> None:
         focus = view.focus

@@ -32,7 +32,7 @@ from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
 from .tasks import ORDER_MODES, ORDER_SEQUENCE
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 
 
 def _now_iso() -> str:
@@ -168,8 +168,22 @@ def _migrate_to_v2(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v3(conn: sqlite3.Connection) -> None:
+    """A Recovered day is a Steady day with a start time; the CHECK on day_type stays valid."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(day_entries)")}
+    if "start_time" not in existing:
+        conn.execute("ALTER TABLE day_entries ADD COLUMN start_time TEXT")
+
+
+def _migrate_to_v4(conn: sqlite3.Connection) -> None:
+    """Night work: minutes of overtime after Isha, per day."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(day_entries)")}
+    if "overtime_minutes" not in existing:
+        conn.execute("ALTER TABLE day_entries ADD COLUMN overtime_minutes INTEGER NOT NULL DEFAULT 0")
+
+
 #: Append new migrations here; never edit an old one.
-MIGRATIONS = (_migrate_to_v1, _migrate_to_v2)
+MIGRATIONS = (_migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4)
 
 
 # --------------------------------------------------------------------------
@@ -434,27 +448,52 @@ class Database:
 
     # -- day entries -------------------------------------------------------
 
-    def set_day_kind(self, day: date, kind: DayKind, note: str = "") -> None:
+    def set_day_kind(self, day: date, kind: DayKind, note: str = "", start: time | None = None) -> None:
+        """Mark a day. ``RECOVERED`` is a Steady entry plus the time the day began; saving it
+        again without ``start`` (to change a note) keeps the time already stored."""
+        recovered = kind is DayKind.RECOVERED
+        code = DayKind.STEADY.value if recovered else kind.value
         with self.transaction() as conn:
             conn.execute(
-                """INSERT INTO day_entries(day_date, day_type, notes, updated_at)
-                   VALUES (?, ?, ?, ?)
+                """INSERT INTO day_entries(day_date, day_type, notes, updated_at, start_time)
+                   VALUES (:day, :code, :note, :now, :start)
                    ON CONFLICT(day_date) DO UPDATE SET
-                       day_type=excluded.day_type, notes=excluded.notes, updated_at=excluded.updated_at""",
-                (day.isoformat(), kind.value, note, _now_iso()),
+                       day_type=excluded.day_type, notes=excluded.notes, updated_at=excluded.updated_at,
+                       overtime_minutes=CASE WHEN excluded.day_type='off' THEN 0 ELSE day_entries.overtime_minutes END,
+                       start_time=CASE WHEN :recovered
+                                       THEN COALESCE(excluded.start_time, day_entries.start_time) ELSE NULL END""",
+                {"day": day.isoformat(), "code": code, "note": note, "now": _now_iso(),
+                 "start": start.strftime("%H:%M") if recovered and start else None, "recovered": int(recovered)},
+            )
+
+    def set_day_overtime(self, day: date, minutes: int) -> None:
+        """Set (or, with 0, remove) the night work of a day, keeping whatever kind it already has."""
+        with self.transaction() as conn:
+            conn.execute(
+                """INSERT INTO day_entries(day_date, day_type, notes, updated_at, overtime_minutes)
+                   VALUES (?, '50', '', ?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET
+                       overtime_minutes=excluded.overtime_minutes, updated_at=excluded.updated_at""",
+                (day.isoformat(), _now_iso(), max(0, minutes)),
             )
 
     def day_entries(self, start: date, end: date) -> dict[date, DayEntry]:
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT day_date, day_type, notes FROM day_entries "
+                "SELECT day_date, day_type, notes, start_time, overtime_minutes FROM day_entries "
                 "WHERE day_date BETWEEN ? AND ? ORDER BY day_date",
                 (start.isoformat(), end.isoformat()),
             ).fetchall()
         entries = {}
         for row in rows:
             day = date.fromisoformat(row["day_date"])
-            entries[day] = DayEntry(day, DayKind.from_code(row["day_type"]), row["notes"] or "")
+            kind, started = DayKind.from_code(row["day_type"]), None
+            if kind is DayKind.STEADY and row["start_time"]:
+                try:
+                    started, kind = parse_clock(row["start_time"]), DayKind.RECOVERED
+                except ValueError:
+                    pass
+            entries[day] = DayEntry(day, kind, row["notes"] or "", started, int(row["overtime_minutes"] or 0))
         return entries
 
     def day_kind(self, day: date) -> DayKind:

@@ -167,6 +167,10 @@ class BankPage(Page):
             self.day_note_hint.set_text("Before the bank started counting. This day has no effect.")
         elif self.selected > date.today():
             self.day_note_hint.set_text("A future day. You can classify it once it arrives.")
+        elif entry and entry.kind is DayKind.RECOVERED:
+            self.day_note_hint.set_text(
+                f"A recovered day: it began at {entry.start:%H:%M}. It counts as Steady. Choosing a kind replaces it."
+            )
         else:
             self.day_note_hint.set_text("Unmarked days count as Steady. You can change past days too.")
         self._render_month()
@@ -192,6 +196,8 @@ class BankPage(Page):
                         button.add_css_class("fj-day-push")
                     elif entry.kind is DayKind.REST:
                         button.add_css_class("fj-day-rest")
+                    elif entry.kind is DayKind.RECOVERED:
+                        button.add_css_class("fj-day-recovered")
                 if day == today:
                     button.add_css_class("fj-day-today")
                 if day == self.selected:

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Recovered day
+- **I overslept…** on a Steady day starts the day at the time you really woke. Work is 50% of the time you are awake (start to Isha) and may run into the afternoon, so the plan is rescued instead of lost. It counts as Steady for the bank, never shortens the night, and pomodoro, planning and task room follow the new window. *Change* and *Undo* are on Today; recovered days are outlined in the Bank calendar.
+- Stored as a Steady entry with a start time (schema 3 adds one column), so older versions simply see a Steady day.
+
+### Night work
+- **Work into the night…** adds one to four hours of work after Isha on any working day. It is not recommended, so it first suggests moving tasks to tomorrow and only then offers the hours, showing the bedtime and sleep given up. Neutral for the bank. Pomodoro, alarms, planning and task room extend with it. Schema 4 adds one column.
+
 ### Focus
 - **Pomodoro.** Each day's work is cut into focus blocks and breaks, with an alarm at every change. Defaults: 50 minute focus, 10 minute short break, 30 minute long break after three focus blocks. Block length, both break lengths and how often the long break comes are adjustable; short breaks, long breaks and pomodoro itself can each be switched off (pomodoro is on by default).
 - **Pause and resume** the running block (a glass of water): everything after it moves later by the length of the pause, and nothing rings while paused.
@@ -14,7 +21,7 @@
 
 ### Changed
 - Screens are now Today, Tomorrow, Routine, Bank, Alarms, Prayers (`Ctrl+1`…`Ctrl+6`). The tab switcher moves to a bottom bar when the window is too narrow for six tabs.
-- Database schema 2 adds the `tasks` and `pomodoro_pauses` tables. Existing data is untouched.
+- Database schema 4 adds the `tasks` and `pomodoro_pauses` tables, a day start time and night work. Existing data is untouched.
 
 ## 2.0.0
 

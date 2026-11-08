@@ -206,6 +206,77 @@ class UiSmokeTests(unittest.TestCase):
             prefs.destroy()
         self.assertEqual(self.ctx.settings.pomodoro, saved)
 
+    def test_overslept_starts_the_day_later_and_can_be_undone(self):
+        from datetime import time
+
+        from fuzzy_journey.rhythm import DayKind
+        from fuzzy_journey.ui.dialogs.recovered_dialog import RecoveredDialog
+
+        today = self.window.pages["today"]
+        self.assertTrue(today.overslept.get_visible() and today.selector.get_visible())
+        self.assertFalse(today.recovered.get_visible())
+        dialog = RecoveredDialog(self.window, self.ctx, date(2026, 11, 2))
+        dialog.start.time = time(4, 0)  # before Fajr: refused, nothing saved
+        self.assertFalse(dialog.save())
+        self.assertIs(self.ctx.db.day_kind(date(2026, 11, 2)), DayKind.STEADY)
+        dialog.start.time = time(10, 0)
+        self.assertTrue(dialog.save())
+        self.assertIs(self.ctx.db.day_kind(date(2026, 11, 2)), DayKind.RECOVERED)
+        self.assertTrue(today.recovered.get_visible())
+        self.assertFalse(today.selector.get_visible() or today.overslept.get_visible())
+        self.assertIn("10:00", today.recovered.get_subtitle())
+        self.assertEqual(today.card.timer.get_text()[2], ":")  # the pomodoro clock follows the new window
+        today._on_undo(None)
+        self.assertIs(self.ctx.db.day_kind(date(2026, 11, 2)), DayKind.STEADY)
+        self.assertTrue(today.selector.get_visible() and today.overslept.get_visible())
+
+    def test_night_work_asks_you_to_move_tasks_first_and_shows_its_cost(self):
+        from fuzzy_journey.models import Task
+        from fuzzy_journey.rhythm import DayKind
+        from fuzzy_journey.ui.dialogs.overtime_dialog import OvertimeDialog
+
+        day = date(2026, 11, 2)
+        today = self.window.pages["today"]
+        self.assertTrue(today.night_button.get_visible())
+        self.assertFalse(today.night_row.get_visible())
+        tid = self.ctx.db.save_task(Task("Still open", 45, day))
+
+        dialog = OvertimeDialog(self.window, self.ctx, day)
+        self.assertEqual(dialog.move.get_label(), "Move tasks to tomorrow")  # the better way is offered first
+        self.assertFalse(dialog.save_button.get_visible() or dialog.revealer.get_reveal_child())  # hours need a 2nd step
+        dialog._reveal()
+        dialog.length.set_value(90)
+        self.assertIn("given up", dialog.cost.get_text())
+        self.assertIn("18:20 to 19:50", dialog.cost.get_text())
+        dialog._on_save(None)
+        self.assertEqual(self.ctx.db.day_entries(day, day)[day].overtime, 90)
+        self.assertTrue(today.night_row.get_visible() and not today.night_button.get_visible())
+        self.assertIn("not recommended", today.night_row.get_subtitle())
+        self.assertIn("19:50", today.night_row.get_subtitle())
+
+        change = OvertimeDialog(self.window, self.ctx, day, 90)  # changing skips the warning step
+        self.assertTrue(change.save_button.get_visible() and change.revealer.get_reveal_child())
+        change.length.set_value(60)
+        change._on_save(None)
+        self.assertEqual(self.ctx.db.day_entries(day, day)[day].overtime, 60)
+
+        today._on_remove_night(None)
+        self.assertEqual(self.ctx.db.day_entries(day, day)[day].overtime, 0)
+        self.assertTrue(today.night_button.get_visible())
+
+        again = OvertimeDialog(self.window, self.ctx, day)
+        again._on_move(None)  # opens the settle dialog instead of adding hours
+        self.assertEqual(self.ctx.db.day_entries(day, day)[day].overtime, 0)
+        self.ctx.db.delete_task(tid)
+
+        try:
+            self.ctx.db.set_day_kind(day, DayKind.REST)  # no work, so nothing to add to
+            self.ctx.changed("day")
+            self.assertFalse(today.night_button.get_visible())
+        finally:
+            self.ctx.db.set_day_kind(day, DayKind.STEADY)
+            self.ctx.changed("day")
+
     def test_theme_switch(self):
         from fuzzy_journey.ui.dialogs.preferences import apply_theme
 

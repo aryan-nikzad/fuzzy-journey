@@ -55,6 +55,17 @@ No account, no cloud. Alarms ring without internet.
 
 ## What it deliberately is not
 
-- Not a to-do list or a calendar. It shapes the *day*, not your tasks.
+- Not a project manager or a calendar. It shapes the *day*. Tasks are only what fits in a day's focus time: no projects, tags, due dates or priorities beyond order and importance.
 - Not a productivity score. There are no streaks, no points, nothing to feel bad about.
 - Not a prayer-time app. Prayer times are the *frame* of the day; the app does not teach or judge your practice.
+
+## When the day goes wrong: a Recovered day
+
+Sometimes you wake late. The Steady plan then asks for work that has already slipped away, so the day is rescued instead of abandoned. On a **Recovered** day the day begins when you really woke, and work is half of the time you are awake from then to Isha. It may run into the afternoon, which is the one place the afternoon is not yours.
+
+It is a rescue, not a plan. It is never offered next to Steady, Push and Rest; it appears only as *I overslept…* on a Steady day. It is neutral for the bank (it counts as Steady), it never shortens your night, and the pomodoro, planning and tasks follow the new window like any other day.
+
+## Night work: allowed, never recommended
+
+*Protect the night* is a rule you can break on purpose. On any working day you can add one to four hours of **night work** after Isha. It is never the default and it is never offered quietly: the app first suggests moving tasks to tomorrow, which is almost always better for the work, for discipline and for health. If you still choose it, its price is shown in the same place as Push evening work: sleep given up. It is neutral for the bank, so it earns nothing.
+

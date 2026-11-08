@@ -145,6 +145,8 @@ def build_today(
     prayer_alarms: Mapping[str, PrayerAlarm],
     evening_start: time = DEFAULT_EVENING_START,
     flex: timedelta = timedelta(0),
+    start: time | None = None,
+    overtime: int = 0,
     pomodoro: PomodoroSettings | None = None,
     pomodoro_sound: Sound | None = None,
     pomodoro_pauses: Sequence[ManualPause] = (),
@@ -158,7 +160,8 @@ def build_today(
     plan = (
         plan_day(
             day, kind, fajr=prayer_day.fajr, isha=prayer_day.isha, next_fajr=next_fajr,
-            evening_start=evening_start, flex=flex,
+            evening_start=evening_start, flex=flex, start=start,
+            overtime=timedelta(minutes=overtime),
         )
         if prayer_day
         else None
@@ -184,9 +187,13 @@ def build_today(
     pauses = collect_pauses(activities, day)
     work: list[WorkItem] = []
     if plan:
-        for title, span in (("Morning work", plan.morning), ("Evening work", plan.evening)):
+        first = "Recovered work" if kind is DayKind.RECOVERED else "Morning work"
+        for title, span in ((first, plan.morning), ("Evening work", plan.evening)):
             if span:
                 work.append(WorkItem(title, work_progress(span.start, span.duration, pauses, now)))
+    if plan and plan.overtime:
+        night = plan.overtime
+        work.append(WorkItem("Night work", work_progress(night.start, night.duration, pauses, now)))
     if kind is not DayKind.REST:
         for act in todays:
             if act.is_work:
@@ -238,8 +245,8 @@ def build_today(
         rows.append(TimelineRow(start, end, slot, title, detail, _state(now, start, end), alarm))
 
     if wake:
-        label = "Wake" if not plan else "Wake · Fajr"
-        add(wake, None, Slot.WAKE, label, "", "Fajr" in prayer_alarm_names and not wake_act)
+        label = "Wake" if not plan or kind is DayKind.RECOVERED else "Wake · Fajr"
+        add(wake, None, Slot.WAKE, label, "", "Fajr" in prayer_alarm_names and not wake_act and kind is not DayKind.RECOVERED)
 
     for item in work:
         p = item.progress
@@ -264,7 +271,7 @@ def build_today(
     elif plan and plan.free:
         # Free time begins when the morning work really finishes (an interruption may delay it).
         free_start = plan.free.start
-        morning = next((w for w in work if w.activity is None and w.title == "Morning work"), None)
+        morning = next((w for w in work if w.activity is None and w.title in ("Morning work", "Recovered work")), None)
         if morning:
             free_start = max(free_start, morning.progress.end)
         free_end = plan.free.end

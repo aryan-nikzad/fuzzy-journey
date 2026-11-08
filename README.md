@@ -66,6 +66,23 @@ For January 1st in Shahrekord (Fajr 05:42, Isha 18:20, so the day is 12 h 38 min
 
 A 07:30-08:00 call during Steady work moves the finish from 12:01 to 12:31. The work is still 6 h 19 min. Personal *Wake* and *Sleep* activities override the Fajr and Isha defaults.
 
+## When you overslept: a Recovered day
+
+If you wake late, a Steady day asks for work that has already slipped away. On a Steady day, press **I overslept…** on Today and say when you really woke. The day then begins at that time, and work is **50% of the time you are awake** (your start to Isha), allowed to run into the afternoon. For example, waking at 10:00 on a day ending at Isha 18:20 gives 4 h 10 min of work, 10:00 to 14:10.
+
+- It is a rescue, not a choice: it is not one of Steady, Push and Rest. It counts as Steady for the bank and never shortens your night.
+- Pomodoro, planning and tasks all follow the new window. Tasks set the day before are kept; if they no longer fit, the meter shows it and you settle them at planning (carry them on or cancel them).
+- **Change** moves the start time and **Undo** returns to a plain Steady day. Past recovered days are outlined in the Bank calendar.
+
+## Night work (not recommended)
+
+On any working day, **Work into the night…** on Today adds one to four hours of work after Isha (in half-hour steps), on a Steady, Push or Recovered day alike. It is the same trade Push evening work makes, and it shows its price the same way: bed moves later and *sleep given up* is shown.
+
+- **It asks you to move tasks first.** The first screen explains why night work is rarely worth it and offers **Move tasks to tomorrow**. Choosing the hours is a second, deliberate step, with the bedtime and lost sleep shown beside them.
+- Night work begins at Isha, or when the last block ends if that is later. It never overlaps a Push evening block.
+- Pomodoro, alarms, planning and task room extend with it, as for any other work. Planning stays the last thing of the day, so it moves to the end of the night.
+- It is neutral for the bank: it earns nothing. **Change** and **Remove** sit on Today beside the recovered-day controls. A Rest day has no work, so no night work.
+
 ## Focus: pomodoro, planning and tasks
 
 Work is the window; pomodoro cuts it up. With the defaults, a day with 6 h 38 min of work becomes *focus 50, break 10, focus 50, break 10, focus 50, long break 30*, and again, with the last 30 minutes kept for planning. The focus time left over is what your tasks may use.

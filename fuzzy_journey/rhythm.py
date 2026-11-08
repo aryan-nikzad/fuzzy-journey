@@ -56,23 +56,26 @@ class DayKind(Enum):
     STEADY = "50"
     PUSH = "75"
     REST = "off"
+    #: A Steady day that began late: half of the time you are awake, afternoon allowed.
+    #: Stored as a Steady entry with a start time, so older versions still read it.
+    RECOVERED = "recovered"
 
     @property
     def share(self) -> float:
-        return {DayKind.STEADY: 0.50, DayKind.PUSH: 0.75, DayKind.REST: 0.0}[self]
+        return {DayKind.STEADY: 0.50, DayKind.PUSH: 0.75, DayKind.REST: 0.0, DayKind.RECOVERED: 0.50}[self]
 
     @property
     def bank_delta(self) -> float:
         """Days added to (or taken from) the bank by one day of this kind."""
-        return {DayKind.STEADY: 0.0, DayKind.PUSH: 0.5, DayKind.REST: -1.0}[self]
+        return {DayKind.STEADY: 0.0, DayKind.PUSH: 0.5, DayKind.REST: -1.0, DayKind.RECOVERED: 0.0}[self]
 
     @property
     def label(self) -> str:
-        return {DayKind.STEADY: "Steady", DayKind.PUSH: "Push", DayKind.REST: "Rest"}[self]
+        return {DayKind.STEADY: "Steady", DayKind.PUSH: "Push", DayKind.REST: "Rest", DayKind.RECOVERED: "Recovered"}[self]
 
     @property
     def percent(self) -> str:
-        return {DayKind.STEADY: "50%", DayKind.PUSH: "75%", DayKind.REST: "Rest day"}[self]
+        return {DayKind.STEADY: "50%", DayKind.PUSH: "75%", DayKind.REST: "Rest day", DayKind.RECOVERED: "50% from waking"}[self]
 
     @property
     def blurb(self) -> str:
@@ -80,6 +83,7 @@ class DayKind(Enum):
             DayKind.STEADY: "Half the day for work. Neutral for the bank.",
             DayKind.PUSH: "Three quarters of the day for work. Banks half a day.",
             DayKind.REST: "No work today. Spends one day from the bank.",
+            DayKind.RECOVERED: "You woke late. Half of the time you are awake, afternoon included. Neutral for the bank.",
         }[self]
 
     @classmethod
@@ -260,10 +264,36 @@ class DayPlan:
     free: Span | None
     sleep: timedelta
     sleep_lost: timedelta
+    overtime: Span | None = None  # night work after Isha: not recommended, and it costs sleep
 
     @property
     def blocks(self) -> tuple[Span, ...]:
-        return tuple(b for b in (self.morning, self.evening) if b is not None)
+        return tuple(b for b in (self.morning, self.evening, self.overtime) if b is not None)
+
+
+#: Night work (after Isha) is chosen in steps of half an hour, from one hour to four.
+OVERTIME_RANGE = (60, 240)
+OVERTIME_STEP = 30
+
+#: A recovered day needs at least this long between its start and Isha.
+MIN_RECOVERED_WINDOW = timedelta(hours=1)
+
+
+def recovered_start(fajr_at: datetime, isha_at: datetime, start: time | None) -> datetime:
+    """When a recovered day begins: ``start``, kept between Fajr and an hour before Isha."""
+    if start is None:
+        return fajr_at
+    moment = datetime.combine(fajr_at.date(), start)
+    return min(max(moment, fajr_at), isha_at - MIN_RECOVERED_WINDOW)
+
+
+def check_recovered_start(fajr: time, isha: time, start: time) -> str | None:
+    """Why ``start`` cannot begin a recovered day, or ``None``."""
+    if start <= fajr:
+        return f"That is before Fajr ({fajr:%H:%M}). The day already starts then."
+    if datetime.combine(date.min, isha) - datetime.combine(date.min, start) < MIN_RECOVERED_WINDOW:
+        return f"Too close to Isha ({isha:%H:%M}). There would be under an hour left to work."
+    return None
 
 
 def _whole_minutes(value: timedelta) -> timedelta:
@@ -279,11 +309,21 @@ def plan_day(
     next_fajr: time | None = None,
     evening_start: time = DEFAULT_EVENING_START,
     flex: timedelta = timedelta(0),
+    start: time | None = None,
+    overtime: timedelta = timedelta(0),
 ) -> DayPlan:
     """Plan one day from its Fajr and Isha.
 
     ``next_fajr`` is tomorrow's Fajr. When it is unknown (last day of a
     downloaded year) tomorrow is assumed to start at the same time.
+
+    ``start`` is only used by a *Recovered* day: the moment the day really began.
+    Work is then half of the time from ``start`` to Isha, begins at ``start`` and
+    may run into the afternoon, so there is no 14:00 limit and no evening block.
+
+    ``overtime`` is work added after the last prayer, at night. It begins at Isha
+    (or when the last block ends, if later), pushes bedtime out, and is paid for
+    in sleep, which ``sleep_lost`` shows. Rest days have none.
     """
     fajr_at = datetime.combine(day, fajr)
     isha_at = datetime.combine(day, isha)
@@ -291,9 +331,15 @@ def plan_day(
         isha_at += timedelta(days=1)
     next_fajr_at = datetime.combine(day + timedelta(days=1), next_fajr or fajr)
 
+    wake_at = fajr_at
     if kind is DayKind.REST:
         target = timedelta(0)
         morning = evening = None
+    elif kind is DayKind.RECOVERED:
+        wake_at = recovered_start(fajr_at, isha_at, start)
+        target = _whole_minutes((isha_at - wake_at) * kind.share + flex)
+        morning = Span(wake_at, wake_at + target) if target > timedelta(0) else None
+        evening = None
     else:
         blocks = calculate_work_blocks(fajr_at, isha_at, kind.share, flex, evening_start)
         # Whole minutes throughout: what the clock shows is what the arithmetic used.
@@ -304,10 +350,15 @@ def plan_day(
         evening = Span(blocks.block2_start, blocks.block2_start + overflow) if overflow > timedelta(0) else None
 
     # Evening work is the last resort: it only pushes bedtime when it runs past Isha.
-    bedtime = max(evening.end, isha_at) if evening else isha_at
+    last_end = evening.end if evening else (morning.end if kind is DayKind.RECOVERED and morning else None)
+    late = None  # night work, after the last prayer
+    if kind is not DayKind.REST and overtime > timedelta(0):
+        begin = max(isha_at, last_end or isha_at)
+        late = Span(begin, begin + _whole_minutes(overtime))
+    bedtime = max(late.end if late else (last_end or isha_at), isha_at)
 
-    free_start = morning.end if morning else fajr_at
-    free_end = evening.start if evening else bedtime
+    free_start = morning.end if morning else wake_at
+    free_end = evening.start if evening else (late.start if late else bedtime)
     free = Span(free_start, free_end) if free_end > free_start else None
 
     night = next_fajr_at - isha_at
@@ -317,7 +368,7 @@ def plan_day(
     return DayPlan(
         day=day,
         kind=kind,
-        wake=fajr_at,
+        wake=wake_at,
         bedtime=bedtime,
         next_wake=next_fajr_at,
         target=target,
@@ -326,6 +377,7 @@ def plan_day(
         free=free,
         sleep=sleep,
         sleep_lost=sleep_lost,
+        overtime=late,
     )
 
 

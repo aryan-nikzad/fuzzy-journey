@@ -133,6 +133,8 @@ class KindSelector(Gtk.Box):
     """Three linked toggle buttons. Emits ``kind-selected`` only for user changes."""
 
     __gsignals__ = {"kind-selected": (GObject.SignalFlags.RUN_FIRST, None, (str,))}
+    #: Recovered is a rescue, not a choice, so it is never offered here.
+    CHOICES = (DayKind.STEADY, DayKind.PUSH, DayKind.REST)
 
     def __init__(self) -> None:
         super().__init__(orientation=Gtk.Orientation.HORIZONTAL)
@@ -142,7 +144,7 @@ class KindSelector(Gtk.Box):
         self._buttons: dict[DayKind, Gtk.ToggleButton] = {}
         self._quiet = False
         first = None
-        for kind in DayKind:
+        for kind in self.CHOICES:
             button = Gtk.ToggleButton()
             button.set_child(self._two_lines(kind.label, kind.percent if kind is not DayKind.REST else "no work"))
             button.set_tooltip_text(kind.blurb)
@@ -169,7 +171,7 @@ class KindSelector(Gtk.Box):
 
     def set_kind(self, kind: DayKind) -> None:
         self._quiet = True
-        self._buttons[kind].set_active(True)
+        self._buttons[kind if kind in self._buttons else DayKind.STEADY].set_active(True)
         self._quiet = False
 
 

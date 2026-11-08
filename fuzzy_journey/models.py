@@ -124,6 +124,8 @@ class DayEntry:
     day: date
     kind: DayKind
     note: str = ""
+    start: time | None = None  # when a Recovered day really began
+    overtime: int = 0  # minutes of night work, after Isha
 
 
 @dataclass(frozen=True)
