@@ -42,6 +42,7 @@ class TaskList(Gtk.Box):
         self.day = clock_now().date()
         self.focus = 0
         self._signature: tuple = ()
+        self._prayers_open = False
 
         head = Gtk.Box(spacing=12)
         head.append(label("Tasks", "heading", xalign=0.0))
@@ -67,8 +68,14 @@ class TaskList(Gtk.Box):
     def show_day(self, day: date, focus_minutes: int) -> None:
         self.day, self.focus = day, focus_minutes
         mode = self.ctx.settings.task_order
-        items = tasks.in_order(self.ctx.db.tasks_on(day), mode)
-        signature = (day, focus_minutes, mode, tuple((t.id, t.title, t.minutes, t.level, t.status, t.position) for t in items))
+        today = clock_now().date()
+        if today <= day <= today + timedelta(days=14):  # the prayers are there when the day is
+            self.ctx.db.ensure_prayer_tasks(day)
+        everything = self.ctx.db.tasks_on(day)
+        prayers = sorted((t for t in everything if t.is_prayer), key=lambda t: (t.origin_id is None, t.position, t.id))
+        items = tasks.in_order([t for t in everything if not t.is_prayer], mode)
+        signature = (day, focus_minutes, mode, self.ctx.location.slug,
+                     tuple((t.id, t.title, t.minutes, t.level, t.status, t.position) for t in everything))
         if signature == self._signature:
             return
         self._signature = signature
@@ -87,6 +94,8 @@ class TaskList(Gtk.Box):
             self.meter_label.set_text(text)
 
         clear(self.list)
+        if prayers:
+            self.list.append(self._prayers(prayers, mode))
         open_tasks = [t for t in items if t.status is TaskStatus.UNSET]
         for task in items:
             self.list.append(self._row(task, open_tasks, mode))
@@ -99,10 +108,26 @@ class TaskList(Gtk.Box):
         )
         self.list.append(self.add_row)
 
-    def _row(self, task: Task, open_tasks: list[Task], mode: str) -> Adw.ActionRow:
+    def _prayers(self, prayers: list[Task], mode: str) -> Adw.ExpanderRow:
+        """The five prayers: zero-length tasks, folded into one row so they do not crowd the list."""
+        done = sum(1 for t in prayers if t.status is TaskStatus.DONE)
+        group = Adw.ExpanderRow(title="Prayers", subtitle=f"{done} of {len(prayers)} done")
+        group.set_expanded(self._prayers_open)
+        group.connect("notify::expanded", lambda r, _p: setattr(self, "_prayers_open", r.get_expanded()))
+        day = self.ctx.library.day(self.ctx.location.slug, self.day)
+        for task in prayers:
+            group.add_row(self._row(task, [], mode, day.times if day else {}))
+        return group
+
+    def _row(self, task: Task, open_tasks: list[Task], mode: str, times: dict | None = None) -> Adw.ActionRow:
         row = Adw.ActionRow(title=GLib.markup_escape_text(task.title), activatable=False)
         parts = [minutes_text(task.minutes)]
-        if mode == tasks.ORDER_LEVEL and task.status is TaskStatus.UNSET:
+        if task.is_prayer:
+            at = (times or {}).get(task.title)
+            parts = [f"{at:%H:%M}"] if at else []
+            if task.origin_id is not None:
+                parts.append("carried over")
+        if mode == tasks.ORDER_LEVEL and task.status is TaskStatus.UNSET and not task.is_prayer:
             parts.append(task.level_label)
         if task.status in (TaskStatus.CARRIED, TaskStatus.CANCELLED):
             parts.append(task.status.label)
@@ -127,7 +152,8 @@ class TaskList(Gtk.Box):
         def item(text, callback, **kw):
             box.append(_menu_item(text, lambda _b: (popover.popdown(), callback()), **kw))
 
-        item("Edit…", lambda: self._edit(task))
+        if not task.is_prayer:
+            item("Edit…", lambda: self._edit(task))
         if mode == tasks.ORDER_SEQUENCE and task in open_tasks:
             i = open_tasks.index(task)
             if i > 0:
@@ -135,16 +161,18 @@ class TaskList(Gtk.Box):
             if i < len(open_tasks) - 1:
                 item("Move down", lambda: self._move(task, 1, open_tasks))
         if started:
-            if task.status is not TaskStatus.CARRIED:
+            if task.status is not TaskStatus.CARRIED and tasks.can_carry(task):
                 target = max(task.day + timedelta(days=1), clock_now().date())
                 item("Move to tomorrow" if target > clock_now().date() else "Move to today",
                      lambda: self._set(task, TaskStatus.CARRIED))
-            if task.status is not TaskStatus.CANCELLED:
-                item("Cancel task", lambda: self._set(task, TaskStatus.CANCELLED))
+            if task.status is not TaskStatus.CANCELLED and tasks.can_cancel(task):
+                item("Cancel" if task.is_prayer else "Cancel task", lambda: self._set(task, TaskStatus.CANCELLED))
             if settled:
                 item("Reset status", lambda: self._set(task, TaskStatus.UNSET))
-        item("Delete", lambda: self._delete(task), destructive=True)
-        row.add_suffix(menu)
+        if not task.is_prayer:
+            item("Delete", lambda: self._delete(task), destructive=True)
+        if box.get_first_child():  # a prayer on a future day has nothing to choose yet
+            row.add_suffix(menu)
         return row
 
     # -- actions -----------------------------------------------------------

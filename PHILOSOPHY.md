@@ -57,7 +57,7 @@ No account, no cloud. Alarms ring without internet.
 
 - Not a project manager or a calendar. It shapes the *day*. Tasks are only what fits in a day's focus time: no projects, tags, due dates or priorities beyond order and importance.
 - Not a productivity score. There are no streaks, no points, nothing to feel bad about.
-- Not a prayer-time app. Prayer times are the *frame* of the day; the app does not teach or judge your practice.
+- Not a prayer-time app. Prayer times are the *frame* of the day; the app does not teach or judge your practice. The five prayers can be ticked off as zero-length tasks, but that is only your own record: no streaks, no scores, never counted as focus time.
 
 ## When the day goes wrong: a Recovered day
 

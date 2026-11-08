@@ -23,7 +23,7 @@ class OvertimeDialog(Adw.Window):
     def __init__(self, parent: Gtk.Window, ctx: Context, day: date, current: int = 0) -> None:
         super().__init__(transient_for=parent, modal=True, title="Night work", default_width=460, default_height=520)
         self.ctx, self.day, self.current = ctx, day, current
-        self.open_tasks = [t for t in ctx.db.tasks_on(day) if t.status is TaskStatus.UNSET]
+        self.open_tasks = [t for t in ctx.db.tasks_on(day) if t.status is TaskStatus.UNSET and not t.is_prayer]
 
         cancel = Gtk.Button(label="Cancel")
         cancel.connect("clicked", lambda _b: self.close())

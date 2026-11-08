@@ -20,6 +20,20 @@ ORDER_MODES = (ORDER_SEQUENCE, ORDER_LEVEL)
 
 MIN_MINUTES, MAX_MINUTES, STEP_MINUTES = 5, 360, 5
 
+#: The five daily prayers, as zero-length tasks. They are created for every day, cannot be
+#: edited or deleted, and never count as focus time (their length is 0).
+PRAYERS = ("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
+
+
+def can_carry(task: Task) -> bool:
+    """A prayer may wait one day, no more: the copy that was carried over cannot be carried again."""
+    return not (task.is_prayer and task.origin_id is not None)
+
+
+def can_cancel(task: Task) -> bool:
+    """A prayer is never cancelled, except the carried copy, so the app does not ask about it for ever."""
+    return not task.is_prayer or task.origin_id is not None
+
 
 def in_order(tasks: Iterable[Task], mode: str) -> list[Task]:
     """Tasks as they should be done. Settled tasks sink below open ones."""

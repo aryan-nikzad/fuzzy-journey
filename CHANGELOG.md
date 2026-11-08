@@ -6,6 +6,9 @@
 - **I overslept…** on a Steady day starts the day at the time you really woke. Work is 50% of the time you are awake (start to Isha) and may run into the afternoon, so the plan is rescued instead of lost. It counts as Steady for the bank, never shortens the night, and pomodoro, planning and task room follow the new window. *Change* and *Undo* are on Today; recovered days are outlined in the Bank calendar.
 - Stored as a Steady entry with a start time (schema 3 adds one column), so older versions simply see a Steady day.
 
+### Prayers as tasks
+- The five prayers appear on every day as zero-length tasks in one folded **Prayers** row. They never use focus time and cannot be edited or deleted. A prayer can be moved to tomorrow once; the copy can only be done or cancelled. Schema 5 adds a `kind` column to `tasks`.
+
 ### Night work
 - **Work into the night…** adds one to four hours of work after Isha on any working day. It is not recommended, so it first suggests moving tasks to tomorrow and only then offers the hours, showing the bedtime and sleep given up. Neutral for the bank. Pomodoro, alarms, planning and task room extend with it. Schema 4 adds one column.
 
@@ -21,7 +24,7 @@
 
 ### Changed
 - Screens are now Today, Tomorrow, Routine, Bank, Alarms, Prayers (`Ctrl+1`…`Ctrl+6`). The tab switcher moves to a bottom bar when the window is too narrow for six tabs.
-- Database schema 4 adds the `tasks` and `pomodoro_pauses` tables, a day start time and night work. Existing data is untouched.
+- Database schema 5 adds the `tasks` and `pomodoro_pauses` tables, a day start time, night work and a task kind. Existing data is untouched.
 
 ## 2.0.0
 

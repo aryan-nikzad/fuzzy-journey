@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from ... import tasks
 from ...models import TaskStatus
 from ...timeutil import now as clock_now
 from ..context import Context
@@ -48,13 +49,16 @@ class ReviewDialog(Adw.Window):
             return
         today = clock_now().date()
         for task in pending:
-            row = Adw.ActionRow(title=GLib.markup_escape_text(task.title),
-                                subtitle=f"{task.day:%A %-d %B} · {minutes_text(task.minutes)}")
+            length = "" if task.is_prayer else f" · {minutes_text(task.minutes)}"
+            row = Adw.ActionRow(title=GLib.markup_escape_text(task.title), subtitle=f"{task.day:%A %-d %B}{length}")
             buttons = Gtk.Box(valign=Gtk.Align.CENTER)
             buttons.add_css_class("linked")
             target = max(task.day + timedelta(days=1), today)
-            choices = (("Done", TaskStatus.DONE), ("Today" if target <= today else "Tomorrow", TaskStatus.CARRIED),
-                       ("Cancel", TaskStatus.CANCELLED))
+            choices = [("Done", TaskStatus.DONE)]
+            if tasks.can_carry(task):
+                choices.append(("Today" if target <= today else "Tomorrow", TaskStatus.CARRIED))
+            if tasks.can_cancel(task):
+                choices.append(("Cancel", TaskStatus.CANCELLED))
             for text, status in choices:
                 button = Gtk.Button(label=text)
                 button.connect("clicked", lambda _b, t=task, s=status: self._settle(t, s))

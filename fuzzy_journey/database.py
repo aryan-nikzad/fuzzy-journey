@@ -29,10 +29,10 @@ from .models import (
 from .paths import DATABASE_PATH, ensure_data_dir
 from .pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE, ManualPause, PomodoroSettings
 from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
-from .tasks import ORDER_MODES, ORDER_SEQUENCE
+from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def _now_iso() -> str:
@@ -182,8 +182,15 @@ def _migrate_to_v4(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE day_entries ADD COLUMN overtime_minutes INTEGER NOT NULL DEFAULT 0")
 
 
+def _migrate_to_v5(conn: sqlite3.Connection) -> None:
+    """Tasks have a kind: an ordinary task, or one of the five daily prayers."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(tasks)")}
+    if "kind" not in existing:
+        conn.execute("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'")
+
+
 #: Append new migrations here; never edit an old one.
-MIGRATIONS = (_migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4)
+MIGRATIONS = (_migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5)
 
 
 # --------------------------------------------------------------------------
@@ -508,15 +515,30 @@ class Database:
         return Task(
             title=row["title"], minutes=row["minutes"], day=date.fromisoformat(row["day_date"]),
             level=row["level"], position=row["position"], status=TaskStatus(row["status"]),
-            origin_id=row["origin_id"], id=row["id"],
+            origin_id=row["origin_id"], id=row["id"], kind=row["kind"],
         )
 
-    def tasks_on(self, day: date) -> list[Task]:
+    def tasks_on(self, day: date, *, prayers: bool = True) -> list[Task]:
         with self.connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE day_date=? ORDER BY position, id", (day.isoformat(),)
             ).fetchall()
-        return [self._task(r) for r in rows]
+        return [t for t in map(self._task, rows) if prayers or not t.is_prayer]
+
+    def ensure_prayer_tasks(self, day: date) -> None:
+        """Give ``day`` its five prayers. Safe to call any number of times."""
+        with self.transaction(immediate=True) as conn:
+            have = {r[0] for r in conn.execute(
+                "SELECT title FROM tasks WHERE day_date=? AND kind='prayer' AND origin_id IS NULL",
+                (day.isoformat(),),
+            )}
+            for position, name in enumerate(PRAYERS):
+                if name not in have:
+                    conn.execute(
+                        """INSERT INTO tasks(day_date, title, minutes, level, position, status, kind, created_at)
+                           VALUES (?, ?, 0, 2, ?, 'unset', 'prayer', ?)""",
+                        (day.isoformat(), name, position, _now_iso()),
+                    )
 
     def unset_tasks_before(self, day: date) -> list[Task]:
         """Tasks from earlier days that still have no status."""
@@ -543,7 +565,7 @@ class Database:
                 task.id, task.position = int(cursor.lastrowid), position
             else:
                 conn.execute(
-                    "UPDATE tasks SET title=?, minutes=?, level=? WHERE id=?",
+                    "UPDATE tasks SET title=?, minutes=?, level=? WHERE id=? AND kind='task'",
                     (task.title.strip(), task.minutes, task.level, task.id),
                 )
         return int(task.id)
@@ -551,7 +573,7 @@ class Database:
     def delete_task(self, task_id: int) -> None:
         with self.transaction() as conn:
             conn.execute("DELETE FROM tasks WHERE origin_id=? AND status='unset'", (task_id,))
-            conn.execute("DELETE FROM tasks WHERE id=?", (task_id,))
+            conn.execute("DELETE FROM tasks WHERE id=? AND kind='task'", (task_id,))  # prayers stay
 
     def move_task(self, task: Task, direction: int, siblings: list[Task]) -> None:
         """Swap ``task`` with its neighbour in ``siblings`` (already in display order)."""
@@ -575,6 +597,10 @@ class Database:
             if row is None:
                 return
             task = self._task(row)
+            if (status is TaskStatus.CARRIED and not can_carry(task)) or (
+                status is TaskStatus.CANCELLED and not can_cancel(task)
+            ):
+                return  # the rules for prayers live in tasks.py; this is where they are enforced
             conn.execute("UPDATE tasks SET status=? WHERE id=?", (status.value, task_id))
             if status is TaskStatus.CARRIED and task.status is not TaskStatus.CARRIED:
                 target = task.day + timedelta(days=1)
@@ -583,9 +609,9 @@ class Database:
                     "SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE day_date=?", (tomorrow,)
                 ).fetchone()[0]
                 conn.execute(
-                    """INSERT INTO tasks(day_date, title, minutes, level, position, status, origin_id, created_at)
-                       VALUES (?, ?, ?, ?, ?, 'unset', ?, ?)""",
-                    (tomorrow, task.title, task.minutes, task.level, position, task_id, _now_iso()),
+                    """INSERT INTO tasks(day_date, title, minutes, level, position, status, origin_id, kind, created_at)
+                       VALUES (?, ?, ?, ?, ?, 'unset', ?, ?, ?)""",
+                    (tomorrow, task.title, task.minutes, task.level, position, task_id, task.kind, _now_iso()),
                 )
             elif task.status is TaskStatus.CARRIED and status is not TaskStatus.CARRIED:
                 conn.execute("DELETE FROM tasks WHERE origin_id=? AND status='unset'", (task_id,))

@@ -25,6 +25,22 @@ except (ImportError, ValueError):
 
 
 @unittest.skipUnless(HAVE_GTK, "GTK 4 / libadwaita / display not available")
+def _buttons(row):
+    """The Done / Tomorrow / Cancel buttons of one row in the review dialog."""
+    found = []
+
+    def walk(widget):
+        child = widget.get_first_child()
+        while child:
+            if child.__class__.__name__ == "Button":
+                found.append(child)
+            walk(child)
+            child = child.get_next_sibling()
+
+    walk(row)
+    return found
+
+
 class UiSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -125,13 +141,13 @@ class UiSmokeTests(unittest.TestCase):
         ok.title_row.set_text("Write the chapter")
         ok.length.set_value(37)  # snaps to a five-minute step
         self.assertTrue(ok.save())
-        saved = self.ctx.db.tasks_on(day)
+        saved = self.ctx.db.tasks_on(day, prayers=False)
         self.assertEqual([(t.title, t.minutes) for t in saved], [("Write the chapter", 35)])
         too_long = TaskDialog(self.window, self.ctx, day, focus)
         too_long.title_row.set_text("Too much")
         too_long.length.set_value(360)
         self.assertFalse(too_long.save())
-        self.assertEqual(len(self.ctx.db.tasks_on(day)), 1)
+        self.assertEqual(len(self.ctx.db.tasks_on(day, prayers=False)), 1)
         for t in saved:
             self.ctx.db.delete_task(t.id)
         self.ctx.changed("tasks")
@@ -141,11 +157,11 @@ class UiSmokeTests(unittest.TestCase):
 
         today, tomorrow = date(2026, 11, 2), date(2026, 11, 3)
         tid = self.ctx.db.save_task(Task("Unfinished", 45, today))
-        self.window.pages["today"].tasks._set(self.ctx.db.tasks_on(today)[0], TaskStatus.CARRIED)
-        self.assertEqual([t.title for t in self.ctx.db.tasks_on(tomorrow)], ["Unfinished"])
-        self.assertIs(self.ctx.db.tasks_on(tomorrow)[0].status, TaskStatus.UNSET)
-        self.window.pages["today"].tasks._set(self.ctx.db.tasks_on(today)[0], TaskStatus.DONE)
-        self.assertEqual(self.ctx.db.tasks_on(tomorrow), [])
+        self.window.pages["today"].tasks._set(self.ctx.db.tasks_on(today, prayers=False)[0], TaskStatus.CARRIED)
+        self.assertEqual([t.title for t in self.ctx.db.tasks_on(tomorrow, prayers=False)], ["Unfinished"])
+        self.assertIs(self.ctx.db.tasks_on(tomorrow, prayers=False)[0].status, TaskStatus.UNSET)
+        self.window.pages["today"].tasks._set(self.ctx.db.tasks_on(today, prayers=False)[0], TaskStatus.DONE)
+        self.assertEqual(self.ctx.db.tasks_on(tomorrow, prayers=False), [])
         self.ctx.db.delete_task(tid)
         self.ctx.changed("tasks")
 
@@ -276,6 +292,37 @@ class UiSmokeTests(unittest.TestCase):
         finally:
             self.ctx.db.set_day_kind(day, DayKind.STEADY)
             self.ctx.changed("day")
+
+    def test_prayers_are_one_folded_row_that_never_uses_focus_time(self):
+        from fuzzy_journey.models import TaskStatus
+        from fuzzy_journey.ui.dialogs.review_dialog import ReviewDialog
+
+        today, tomorrow = date(2026, 11, 2), date(2026, 11, 3)
+        page = self.window.pages["today"]
+        first = page.tasks.list.get_row_at_index(0)
+        self.assertEqual(first.get_title(), "Prayers")
+        self.assertIn("of 5 done", first.get_subtitle())
+        before = page.tasks.meter_label.get_text()
+        fajr = next(t for t in self.ctx.db.tasks_on(today) if t.title == "Fajr")
+        page.tasks._set(fajr, TaskStatus.DONE)
+        self.assertIn("1 of 5 done", page.tasks.list.get_row_at_index(0).get_subtitle())
+        self.assertEqual(page.tasks.meter_label.get_text(), before)  # focus time is untouched
+
+        dhuhr = next(t for t in self.ctx.db.tasks_on(today) if t.title == "Dhuhr")
+        page.tasks._set(dhuhr, TaskStatus.CARRIED)
+        copy = next(t for t in self.ctx.db.tasks_on(tomorrow) if t.title == "Dhuhr" and t.origin_id)
+        dialog = ReviewDialog(self.window, self.ctx, tomorrow)  # the copy may only be done or cancelled
+        rows = [row for row in dialog._rows if row.get_title() == "Dhuhr"]
+        self.assertEqual(len(rows), 2)  # tomorrow's own Dhuhr, and the one carried over from today
+        own, carried = ([b.get_label() for b in _buttons(row)] for row in rows)
+        self.assertEqual(own, ["Done", "Tomorrow", "Cancel"][:2])  # an original prayer may wait a day, not be cancelled
+        self.assertEqual(carried, ["Done", "Cancel"])  # the copy has waited its day already
+        dialog.destroy()
+        self.ctx.db.set_task_status(dhuhr.id, TaskStatus.UNSET)
+        self.ctx.db.set_task_status(fajr.id, TaskStatus.UNSET)
+        self.assertIsNone(self.ctx.db.tasks_on(tomorrow) and next(
+            (t for t in self.ctx.db.tasks_on(tomorrow) if t.id == copy.id), None))
+        self.ctx.changed("tasks")
 
     def test_theme_switch(self):
         from fuzzy_journey.ui.dialogs.preferences import apply_theme

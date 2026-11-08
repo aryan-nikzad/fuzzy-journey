@@ -17,7 +17,7 @@ TICK_SECONDS = 15
 
 class MainWindow(Adw.ApplicationWindow):
     def __init__(self, app: Adw.Application) -> None:
-        super().__init__(application=app, title=APP_NAME, default_width=760, default_height=860)
+        super().__init__(application=app, title=APP_NAME, default_width=880, default_height=860)
         self.set_size_request(480, 480)
         self.ctx = Context()
         self.pages: dict[str, Page] = {}
@@ -134,7 +134,10 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _check_tasks(self, prompt: bool = False) -> None:
         """Yesterday's tasks must be settled before today's plan means anything."""
-        waiting = self.ctx.db.unset_tasks_before(clock_now().date())
+        today = clock_now().date()
+        for day in (today, today + timedelta(days=1)):
+            self.ctx.db.ensure_prayer_tasks(day)
+        waiting = self.ctx.db.unset_tasks_before(today)
         n = len(waiting)
         self.review_banner.set_title(
             f"{n} task from an earlier day needs a status" if n == 1 else f"{n} tasks from earlier days need a status"

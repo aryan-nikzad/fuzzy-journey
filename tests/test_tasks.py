@@ -116,3 +116,66 @@ class StoreTests(DbTestCase):
         self.assertEqual((s.pomodoro.enabled, s.pomodoro.long_enabled, s.pomodoro.focus), (False, False, 25))
         self.assertTrue(s.pomodoro.short_enabled)
         self.assertEqual(s.task_order, tasks.ORDER_LEVEL)
+
+
+class PrayerTests(DbTestCase):
+    def prayers(self, day=DAY):
+        return [t for t in self.db.tasks_on(day) if t.is_prayer]
+
+    def test_every_day_gets_the_five_prayers_once(self):
+        self.db.ensure_prayer_tasks(DAY)
+        self.db.ensure_prayer_tasks(DAY)  # idempotent
+        got = self.prayers()
+        self.assertEqual([t.title for t in got], list(tasks.PRAYERS))
+        self.assertTrue(all(t.minutes == 0 and t.status is TaskStatus.UNSET for t in got))
+        self.assertEqual(self.prayers(date(2026, 11, 3)), [])  # other days are created for themselves
+
+    def test_prayers_never_count_as_focus_time_or_block_a_task(self):
+        self.db.ensure_prayer_tasks(DAY)
+        mine = self.db.tasks_on(DAY)
+        self.assertEqual(tasks.load(mine, 300).planned, 0)
+        self.assertIsNone(tasks.check_task("x", 300, mine, 300))  # all the focus time is still free
+
+    def test_they_cannot_be_deleted_or_edited(self):
+        self.db.ensure_prayer_tasks(DAY)
+        fajr = self.prayers()[0]
+        self.db.delete_task(fajr.id)
+        fajr.title, fajr.minutes = "Renamed", 45
+        self.db.save_task(fajr)
+        again = self.prayers()[0]
+        self.assertEqual((again.title, again.minutes), ("Fajr", 0))
+        self.assertEqual(len(self.prayers()), 5)
+
+    def test_a_prayer_can_wait_one_day_and_no_more(self):
+        self.db.ensure_prayer_tasks(DAY)
+        dhuhr = self.prayers()[1]
+        self.db.set_task_status(dhuhr.id, TaskStatus.CARRIED)
+        copy = next(t for t in self.db.tasks_on(date(2026, 11, 3)) if t.is_prayer)
+        self.assertEqual((copy.title, copy.minutes, copy.origin_id), ("Dhuhr", 0, dhuhr.id))
+        self.db.set_task_status(copy.id, TaskStatus.CARRIED)  # refused: it already waited a day
+        self.assertEqual(self.db.tasks_on(date(2026, 11, 4)), [])
+        self.assertIs(self.db.tasks_on(date(2026, 11, 3), prayers=True)[0].status, TaskStatus.UNSET)
+        self.db.set_task_status(copy.id, TaskStatus.CANCELLED)  # the way out, so it is never asked for ever
+        self.assertIs(self.db.tasks_on(date(2026, 11, 3))[0].status, TaskStatus.CANCELLED)
+
+    def test_an_original_prayer_cannot_be_cancelled(self):
+        self.db.ensure_prayer_tasks(DAY)
+        isha = self.prayers()[4]
+        self.db.set_task_status(isha.id, TaskStatus.CANCELLED)
+        self.assertIs(self.prayers()[4].status, TaskStatus.UNSET)
+        self.db.set_task_status(isha.id, TaskStatus.DONE)
+        self.assertIs(self.prayers()[4].status, TaskStatus.DONE)
+
+    def test_undoing_a_carry_removes_the_copy_and_two_of_a_kind_can_share_a_day(self):
+        tomorrow = date(2026, 11, 3)
+        self.db.ensure_prayer_tasks(DAY)
+        self.db.ensure_prayer_tasks(tomorrow)
+        asr = self.prayers()[2]
+        self.db.set_task_status(asr.id, TaskStatus.CARRIED)
+        self.assertEqual([t.title for t in self.db.tasks_on(tomorrow) if t.title == "Asr"], ["Asr", "Asr"])
+        self.db.set_task_status(asr.id, TaskStatus.DONE)
+        self.assertEqual([t.title for t in self.db.tasks_on(tomorrow) if t.title == "Asr"], ["Asr"])
+
+    def test_unsettled_prayers_of_an_earlier_day_are_asked_about(self):
+        self.db.ensure_prayer_tasks(DAY)
+        self.assertEqual(len(self.db.unset_tasks_before(date(2026, 11, 3))), 5)

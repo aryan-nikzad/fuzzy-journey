@@ -197,7 +197,7 @@ class TaskStatus(Enum):
     @property
     def label(self) -> str:
         return {"unset": "Not set", "done": "Done", "cancelled": "Cancelled",
-                "carried": "Carried over"}[self.value]
+                "carried": "Moved on"}[self.value]
 
 
 TASK_LEVELS = {1: "High", 2: "Normal", 3: "Low"}
@@ -215,6 +215,11 @@ class Task:
     status: TaskStatus = TaskStatus.UNSET
     origin_id: int | None = None  # the task this one was carried over from
     id: int | None = None
+    kind: str = "task"  # "prayer" for the five daily prayers: zero length, never focus time
+
+    @property
+    def is_prayer(self) -> bool:
+        return self.kind == "prayer"
 
     @property
     def level_label(self) -> str:

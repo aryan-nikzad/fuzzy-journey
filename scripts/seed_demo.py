@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fuzzy_journey.database import Database  # noqa: E402
-from fuzzy_journey.models import Activity, Alarm, PrayerAlarm, Sound  # noqa: E402
+from fuzzy_journey.models import Activity, Alarm, PrayerAlarm, Sound, Task, TaskStatus  # noqa: E402
 from fuzzy_journey.rhythm import DayKind  # noqa: E402
 
 
@@ -35,6 +35,12 @@ def main() -> None:
     db.save_alarm(Alarm("Call the bank", "10:30", 31))
     for name in ("Fajr", "Dhuhr", "Maghrib"):
         db.save_prayer_alarm(PrayerAlarm(name, True, 0, Sound(True, "gentle")))
+    for title, minutes in (("Write the chapter", 90), ("Reply to emails", 30), ("Review pull requests", 45)):
+        db.save_task(Task(title, minutes, today))
+    done = next(t for t in db.tasks_on(today) if t.title == "Reply to emails")
+    db.set_task_status(done.id, TaskStatus.DONE)
+    for title, minutes in (("Plan the release", 60), ("Prepare the talk", 120)):
+        db.save_task(Task(title, minutes, today + timedelta(days=1)))
     print("Seeded", db.path)
 
 
