@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import calendar
-from datetime import date
+from datetime import date, timedelta
 
+from ...models import describe_progress
 from ...rhythm import DayKind
 from ..context import Context
 from ..gi_setup import Adw, Gtk
@@ -11,7 +12,7 @@ from .base import Page
 
 
 class BankPage(Page):
-    listens_to = frozenset({"day", "data"})
+    listens_to = frozenset({"day", "data", "progress"})
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
@@ -73,6 +74,15 @@ class BankPage(Page):
         notes.add(self.note)
         day_box.append(notes)
         self.column.append(day_box)
+
+        # -- work done: the focus the clock really ran each day
+        self.done_group = Adw.PreferencesGroup(
+            title="Work done",
+            description="Focus the clock really ran each day: no pauses, breaks or planning. "
+            "Choose hours, percent or focus blocks in Preferences.",
+        )
+        self._done_rows: list[Gtk.Widget] = []
+        self.column.append(self.done_group)
 
         # -- tracking
         tracking = Adw.PreferencesGroup(title="Tracking")
@@ -174,7 +184,28 @@ class BankPage(Page):
         else:
             self.day_note_hint.set_text("Unmarked days count as Steady. You can change past days too.")
         self._render_month()
+        self._render_done()
         self._quiet = False
+
+    def _render_done(self) -> None:
+        for row in self._done_rows:
+            self.done_group.remove(row)
+        self._done_rows = []
+        today = date.today()
+        days = self.ctx.db.progress(today - timedelta(days=13), today)
+        units = self.ctx.settings.progress_units
+        if not days:
+            row = Adw.ActionRow(title="Nothing recorded yet", subtitle="Today’s focus appears here as the day goes.", activatable=False)
+            self.done_group.add(row)
+            self._done_rows.append(row)
+            return
+        for p in days:
+            name = "Today" if p.day == today else p.day.strftime("%a %-d %b")
+            row = Adw.ActionRow(title=name, subtitle=describe_progress(p, units), activatable=False)
+            if p.day == today or not p.final:
+                row.set_tooltip_text("Still counting" if p.day == today else "Not closed yet")
+            self.done_group.add(row)
+            self._done_rows.append(row)
 
     def _render_month(self) -> None:
         clear(self.grid)

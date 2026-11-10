@@ -14,7 +14,15 @@ from enum import Enum
 
 from . import alarms as alarm_rules
 from .models import Activity, Alarm, PrayerAlarm, Sound
-from .pomodoro import ManualPause, PomodoroSettings, Schedule, build_schedule, schedule_events
+from .pomodoro import (
+    ManualPause,
+    PomodoroSettings,
+    Schedule,
+    build_schedule,
+    closing_moment,
+    focus_worked,
+    schedule_events,
+)
 from .prayer_times import PrayerDay
 from .rhythm import (
     DEFAULT_EVENING_START,
@@ -26,6 +34,7 @@ from .rhythm import (
     WorkStatus,
     collect_pauses,
     plan_day,
+    with_manual_pauses,
     work_progress,
 )
 from .timeutil import mask_includes, span_after
@@ -102,6 +111,22 @@ class TodayView:
     next_alarm: NextAlarm | None = None
     alarm_times: frozenset[datetime] = field(default_factory=frozenset)
     schedule: Schedule | None = None
+    #: Every pause of the day, the user's own included. The one list both clocks count from.
+    pauses: tuple[Pause, ...] = ()
+    #: Focus the clock has really run so far today: no pauses, breaks or planning.
+    worked: timedelta = timedelta(0)
+    #: When the day's work is over and its tasks should be settled (planning begins).
+    closing_at: datetime | None = None
+    pomodoro_events: tuple = ()
+
+    @property
+    def closing_due(self) -> bool:
+        return self.closing_at is not None and self.now >= self.closing_at
+
+    @property
+    def work_cut(self) -> timedelta:
+        """Focus left out so that work never runs past bedtime."""
+        return sum((w.progress.cut for w in self.work), timedelta(0))
 
     @property
     def has_prayer_data(self) -> bool:
@@ -147,6 +172,8 @@ def build_today(
     flex: timedelta = timedelta(0),
     start: time | None = None,
     overtime: int = 0,
+    evening: int = 0,
+    protect_bedtime: bool = True,
     pomodoro: PomodoroSettings | None = None,
     pomodoro_sound: Sound | None = None,
     pomodoro_pauses: Sequence[ManualPause] = (),
@@ -161,7 +188,7 @@ def build_today(
         plan_day(
             day, kind, fajr=prayer_day.fajr, isha=prayer_day.isha, next_fajr=next_fajr,
             evening_start=evening_start, flex=flex, start=start,
-            overtime=timedelta(minutes=overtime),
+            overtime=timedelta(minutes=overtime), evening_extra=timedelta(minutes=evening),
         )
         if prayer_day
         else None
@@ -184,21 +211,24 @@ def build_today(
             bedtime += timedelta(days=1)
 
     # ---- work: generated blocks plus the user's own work activities
-    pauses = collect_pauses(activities, day)
+    # The user's own pauses are pauses like any other, so the work clock and the pomodoro
+    # schedule count the same time. Bedtime is the deadline: work never runs past it.
+    pauses = with_manual_pauses(collect_pauses(activities, day), pomodoro_pauses, now)
+    deadline = bedtime if protect_bedtime else None
     work: list[WorkItem] = []
     if plan:
         first = "Recovered work" if kind is DayKind.RECOVERED else "Morning work"
         for title, span in ((first, plan.morning), ("Evening work", plan.evening)):
             if span:
-                work.append(WorkItem(title, work_progress(span.start, span.duration, pauses, now)))
+                work.append(WorkItem(title, work_progress(span.start, span.duration, pauses, now, deadline)))
     if plan and plan.overtime:
         night = plan.overtime
-        work.append(WorkItem("Night work", work_progress(night.start, night.duration, pauses, now)))
+        work.append(WorkItem("Night work", work_progress(night.start, night.duration, pauses, now, deadline)))
     if kind is not DayKind.REST:
         for act in todays:
             if act.is_work:
                 start, end = span_after(day, act.start_clock, act.end_clock)
-                work.append(WorkItem(act.title, work_progress(start, end - start, pauses, now), act))
+                work.append(WorkItem(act.title, work_progress(start, end - start, pauses, now, deadline), act))
     work.sort(key=lambda w: w.progress.start)
 
     focus = (
@@ -212,8 +242,11 @@ def build_today(
     schedule: Schedule | None = None
     pomo_events = []
     if pomodoro is not None:
-        schedule = build_schedule([(w.progress.start, w.progress.planned) for w in work], pauses, pomodoro)
-        pomo_events = schedule_events(schedule, pomodoro_pauses, day, pomodoro_sound or Sound())
+        schedule = build_schedule(
+            [(w.progress.start, w.progress.planned) for w in work], pauses, pomodoro, deadline
+        )
+        held = next((p.span.start for p in pauses if p.open), None)  # nothing rings until resumed
+        pomo_events = schedule_events(schedule, day, pomodoro_sound or Sound(), hold_after=held)
 
     # ---- alarms
     reminder_due = {
@@ -255,9 +288,12 @@ def build_today(
         elif p.status is WorkStatus.DONE:
             detail = f"{_hm(p.start)}–{_hm(p.end)} · done"
         elif p.status is WorkStatus.PAUSED and p.pause:
-            detail = f"Paused for {p.pause.title} · {_pretty(p.remaining)} left"
+            who = "by you" if p.pause.manual else f"for {p.pause.title}"
+            detail = f"Paused {who} · {_pretty(p.remaining)} left"
         else:
             detail = f"{_hm(p.start)}–{_hm(p.end)} · {_pretty(p.remaining)} left"
+        if p.cut > timedelta(0):
+            detail += f" · {_pretty(p.cut)} cut to protect sleep"
         has_alarm = bool(item.activity and (item.activity.alarm_at_start or item.activity.alarm_at_end))
         add(p.start, p.end, Slot.WORK, item.title, detail, has_alarm)
 
@@ -315,11 +351,17 @@ def build_today(
                 segments.append(DayBarSegment(pause.span, "pause"))
     marks = tuple(m for n in DAILY_PRAYERS if prayer_day and (m := prayer_day.at(n)))
 
+    worked = focus_worked(schedule, pauses, now) if schedule else timedelta(0)
+    closing_at = None
+    if kind is not DayKind.REST and work and any(w.progress.planned > timedelta(0) for w in work):
+        closing_at = closing_moment(schedule, max(w.progress.end for w in work))
+
     return TodayView(
         now=now, day=day, kind=kind, plan=plan, wake=wake, bedtime=bedtime, sleep=sleep,
         sleep_lost=sleep_lost, work=tuple(work), work_remaining=remaining, focus=focus,
         timeline=tuple(rows), segments=tuple(segments), prayer_marks=marks,
         next_alarm=next_alarm, alarm_times=frozenset(alarm_moments), schedule=schedule,
+        pauses=tuple(pauses), worked=worked, closing_at=closing_at, pomodoro_events=tuple(pomo_events),
     )
 
 

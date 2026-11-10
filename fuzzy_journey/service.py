@@ -12,7 +12,7 @@ import sys
 import threading
 from datetime import datetime, timedelta
 
-from . import alarms, planner, pomodoro, sound
+from . import alarms, planner, sound
 from .database import Database
 from .meta import APP_NAME
 from .paths import DATABASE_PATH
@@ -40,11 +40,8 @@ def due_rings(db: Database, library: PrayerLibrary, now: datetime) -> list[alarm
     )
     settings = db.settings.pomodoro
     if settings.enabled or settings.planning_enabled:
-        view = planner.build_view(db, library, now)
-        if view.schedule:
-            events += pomodoro.schedule_events(
-                view.schedule, db.pomodoro_pauses(today), today, db.settings.pomodoro_sound
-            )
+        # The view already counts the user's pauses and holds back what follows an open one.
+        events += planner.build_view(db, library, now).pomodoro_events
     return rings + alarms.claim_due_events(db, events, now)
 
 
@@ -68,11 +65,16 @@ def main() -> int:
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stop.set())
 
+    last_recorded: datetime | None = None
     while not stop.is_set():
         try:
-            for ring in due_rings(db, library, datetime.now()):
+            now = datetime.now()
+            for ring in due_rings(db, library, now):
                 log.info("Ringing %s (%s)", ring.title, ring.key)
                 deliver(ring)
+            if last_recorded is None or now - last_recorded >= timedelta(minutes=1):
+                planner.record_progress(db, library, now)  # so a day is counted even if the app stayed closed
+                last_recorded = now
         except Exception:  # noqa: BLE001 - the service must never die on one bad tick
             log.exception("Alarm check failed; will retry.")
         stop.wait(POLL_SECONDS)

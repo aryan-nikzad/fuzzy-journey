@@ -11,7 +11,7 @@ from pathlib import Path
 from fuzzy_journey import pomodoro, sound
 from fuzzy_journey.models import Sound
 from fuzzy_journey.pomodoro import PomodoroSettings, SegmentKind, build_schedule
-from fuzzy_journey.rhythm import Pause, Span
+from fuzzy_journey.rhythm import Pause, Span, with_manual_pauses
 
 START = datetime(2026, 11, 2, 6, 0)
 F, S, L, P = SegmentKind.FOCUS, SegmentKind.SHORT, SegmentKind.LONG, SegmentKind.PLANNING
@@ -88,48 +88,93 @@ class LayoutTests(unittest.TestCase):
 
 
 class PauseTests(unittest.TestCase):
+    """A manual pause is a pause like any other: the schedule is laid out around it."""
+
     def setUp(self):
-        self.schedule = build_schedule(work(200), [], PomodoroSettings(planning_enabled=False))
         self.at = START + timedelta(minutes=20)
+        self.settings = PomodoroSettings(planning_enabled=False)
+
+    def manual(self, resumed_at, now):
+        return with_manual_pauses([], [(self.at, resumed_at)], now)
 
     def test_a_pause_moves_only_what_comes_after(self):
-        pauses = [(self.at, self.at + timedelta(minutes=7))]
-        live = pomodoro.live_segments(self.schedule, pauses, START + timedelta(hours=1))
+        pauses = self.manual(self.at + timedelta(minutes=7), START + timedelta(hours=1))
+        live = build_schedule(work(200), pauses, self.settings).segments
         self.assertEqual(live[0].start, START)
         self.assertEqual(live[0].end, START + timedelta(minutes=57))
         self.assertEqual(live[1].start, START + timedelta(minutes=57))
 
     def test_focus_number_survives_a_resumed_pause(self):
-        # Regression: the card looked the shifted block up in the unshifted schedule and crashed.
-        pauses = [(self.at, self.at + timedelta(minutes=7))]
         now = START + timedelta(hours=1, minutes=20)  # inside the second focus block
-        live = pomodoro.live_segments(self.schedule, pauses, now)
+        pauses = self.manual(self.at + timedelta(minutes=7), now)
+        live = build_schedule(work(200), pauses, self.settings).segments
         cur = pomodoro.current(live, now)
         self.assertEqual(cur.kind, pomodoro.SegmentKind.FOCUS)
-        self.assertNotIn((cur.start, cur.kind), [(s.start, s.kind) for s in self.schedule.segments])
         self.assertEqual(pomodoro.focus_number(live, cur), (2, 3))
 
     def test_while_paused_the_current_block_waits(self):
         now = self.at + timedelta(minutes=9)
-        live = pomodoro.live_segments(self.schedule, [(self.at, None)], now)
-        self.assertEqual(pomodoro.current(live, now), live[0])
-        self.assertEqual(live[0].end - now, timedelta(minutes=30))  # still the 30 minutes left at the pause
+        pauses = self.manual(None, now)
+        live = build_schedule(work(200), pauses, self.settings).segments
+        cur = pomodoro.current(live, now)
+        self.assertEqual(cur, live[0])
+        self.assertEqual(pomodoro.left_in(cur, pauses, now), timedelta(minutes=30))  # what was left at the pause
+        later = now + timedelta(minutes=10)  # ten more minutes of water: still 30 left
+        pauses = self.manual(None, later)
+        self.assertEqual(pomodoro.left_in(pomodoro.current(
+            build_schedule(work(200), pauses, self.settings).segments, later), pauses, later), timedelta(minutes=30))
+
+    def test_a_pause_inside_another_pause_counts_once(self):
+        # The gym 20-80 min in, and a manual pause that began inside it and is still open.
+        gym = [Pause(Span(START + timedelta(minutes=20), START + timedelta(minutes=80)), "gym")]
+        now = START + timedelta(minutes=50)
+        pauses = with_manual_pauses(gym, [(START + timedelta(minutes=30), None)], now)
+        self.assertEqual(len(pauses), 1)
+        self.assertEqual((pauses[0].title, pauses[0].manual, pauses[0].open), ("gym", False, True))
+        self.assertEqual(pauses[0].span.end, START + timedelta(minutes=80))
 
     def test_nothing_rings_while_paused_and_alarms_shift_after_resuming(self):
         day = START.date()
         sound_ = Sound()
-        open_ = pomodoro.schedule_events(self.schedule, [(self.at, None)], day, sound_)
-        self.assertEqual([e.key for e in open_], ["pomo:0"])
-        done = pomodoro.schedule_events(self.schedule, [(self.at, self.at + timedelta(minutes=5))], day, sound_)
-        self.assertEqual(done[1].due, START + timedelta(minutes=55))
+        now = self.at + timedelta(minutes=2)
+        open_ = build_schedule(work(200), self.manual(None, now), self.settings)
+        self.assertEqual([e.key for e in pomodoro.schedule_events(open_, day, sound_, hold_after=self.at)], ["pomo:0"])
+        done = build_schedule(work(200), self.manual(self.at + timedelta(minutes=5), now), self.settings)
+        self.assertEqual(pomodoro.schedule_events(done, day, sound_)[1].due, START + timedelta(minutes=55))
+
+    def test_work_never_runs_past_bedtime(self):
+        bed = START + timedelta(minutes=150)
+        pause = [Pause(Span(START + timedelta(minutes=30), START + timedelta(minutes=100)), "class")]
+        s = build_schedule(work(200), pause, PomodoroSettings(), bed)
+        self.assertLessEqual(max(seg.end for seg in s.segments), bed)
+        self.assertEqual(s.planning.end, bed)  # planning keeps its place at the end of the day
+        self.assertGreater(s.cut, timedelta(0))
+        uncut = build_schedule(work(200), pause, PomodoroSettings())
+        self.assertEqual(uncut.cut, timedelta(0))
+        self.assertGreater(uncut.focus, s.focus)
+
+    def test_focus_worked_counts_only_focus_the_clock_ran(self):
+        s = build_schedule(work(200), [], PomodoroSettings(planning_enabled=False))
+        self.assertEqual(pomodoro.focus_worked(s, [], START + timedelta(minutes=70)), timedelta(minutes=60))  # 50 + 10 of block 2
+        self.assertEqual(pomodoro.focus_worked(s, [], START + timedelta(minutes=55)), timedelta(minutes=50))  # a break adds nothing
+        pause = [Pause(Span(START + timedelta(minutes=10), START + timedelta(minutes=20)), "call")]
+        s = build_schedule(work(200), pause, PomodoroSettings(planning_enabled=False))
+        self.assertEqual(pomodoro.focus_worked(s, pause, START + timedelta(minutes=30)), timedelta(minutes=20))
+
+    def test_closing_moment_is_planning_or_the_end_of_work(self):
+        s = build_schedule(work(120), [], PomodoroSettings())
+        self.assertEqual(pomodoro.closing_moment(s, START + timedelta(minutes=120)), s.planning.start)
+        off = build_schedule(work(120), [], PomodoroSettings(planning_enabled=False))
+        self.assertEqual(pomodoro.closing_moment(off, START + timedelta(minutes=120)), START + timedelta(minutes=120))
+        self.assertIsNone(pomodoro.closing_moment(None, None))
 
     def test_every_segment_and_the_end_of_work_ring(self):
         s = build_schedule(work(120), [], PomodoroSettings(planning_enabled=False))
-        events = pomodoro.schedule_events(s, [], START.date(), Sound())
+        events = pomodoro.schedule_events(s, START.date(), Sound())
         self.assertEqual(len(events), len(s.segments) + 1)
         self.assertEqual(events[-1].title, "Focus finished")
         s = build_schedule(work(120), [], PomodoroSettings())
-        events = pomodoro.schedule_events(s, [], START.date(), Sound())
+        events = pomodoro.schedule_events(s, START.date(), Sound())
         self.assertEqual(len(events), len(s.segments))  # planning start replaces "finished"
 
     def test_database_pauses_round_trip(self):

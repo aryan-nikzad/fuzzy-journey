@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date, time, timedelta
 from enum import Enum
 from pathlib import Path
 
@@ -126,6 +127,53 @@ class DayEntry:
     note: str = ""
     start: time | None = None  # when a Recovered day really began
     overtime: int = 0  # minutes of night work, after Isha
+    evening: int = 0  # minutes of optional evening work added to the day (not recommended)
+
+
+@dataclass(frozen=True)
+class DayProgress:
+    """How much focus a day really had: the time the clock ran, not paused, not on a break."""
+
+    day: date
+    worked: timedelta
+    capacity: timedelta  # the focus time the day offered
+    steady: timedelta  # the focus time a Steady day would have offered
+    block_minutes: int  # length of one focus block when it was recorded
+    final: bool = False  # the day is over and the figure will not change
+
+    @property
+    def hours(self) -> float:
+        return self.worked.total_seconds() / 3600
+
+    @property
+    def percent(self) -> float | None:
+        """Share of a Steady day's focus time, or ``None`` when there is nothing to compare with."""
+        if self.steady <= timedelta(0):
+            return None
+        return 100 * self.worked / self.steady
+
+    @property
+    def blocks(self) -> float:
+        """Focus blocks, with decimals: 2.5 is two and a half blocks of focus."""
+        return self.worked.total_seconds() / 60 / max(1, self.block_minutes)
+
+
+PROGRESS_UNITS = {"hours": "Hours", "percent": "% of a Steady day", "blocks": "Focus blocks"}
+
+
+def describe_progress(progress: DayProgress, units: Iterable[str]) -> str:
+    """One line for a day, in the units the person chose: "2h 40m · 71% · 3.2 blocks"."""
+    from .timeutil import human_duration  # local: timeutil is a leaf, but keep models import-light
+
+    parts = []
+    for unit in units:
+        if unit == "hours":
+            parts.append(human_duration(progress.worked) if progress.worked >= timedelta(minutes=1) else "0m")
+        elif unit == "percent":
+            parts.append("—" if progress.percent is None else f"{progress.percent:.0f}%")
+        elif unit == "blocks":
+            parts.append(f"{progress.blocks:.1f} block{'s' if round(progress.blocks, 1) != 1 else ''}")
+    return " · ".join(parts)
 
 
 @dataclass(frozen=True)

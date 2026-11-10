@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, timedelta
 
-from .. import sound
+from .. import planner, sound
 from ..meta import APP_NAME
 from ..timeutil import now as clock_now
 from . import service_control
@@ -13,6 +14,9 @@ from .gi_setup import Adw, GLib, GObject, Gtk
 from .pages.base import Page
 
 TICK_SECONDS = 15
+RECORD_EVERY = 4  # ticks: the day's real focus is written down once a minute
+
+log = logging.getLogger(__name__)
 
 
 class MainWindow(Adw.ApplicationWindow):
@@ -22,6 +26,8 @@ class MainWindow(Adw.ApplicationWindow):
         self.ctx = Context()
         self.pages: dict[str, Page] = {}
         self._today = date.today()
+        self._ticks = 0
+        self._closing = None  # the open check-in, so only one is ever shown
 
         self.stack = Adw.ViewStack(vexpand=True)
         self._build_pages()
@@ -66,6 +72,7 @@ class MainWindow(Adw.ApplicationWindow):
         GLib.timeout_add_seconds(1, self._watch_alarm)
         self._check_service()
         self._check_tasks(prompt=True)
+        GLib.idle_add(self._record_progress)
 
     # -- pages -------------------------------------------------------------
 
@@ -128,7 +135,36 @@ class MainWindow(Adw.ApplicationWindow):
         else:
             self.ctx.changed("tick")
         self._check_service()
+        self._ticks += 1
+        if self._ticks % RECORD_EVERY == 0:
+            self._record_progress()
+        self._check_closing()
         return GLib.SOURCE_CONTINUE
+
+    def _record_progress(self) -> bool:
+        """Write down the focus today's clock has run, for the work-done figures on the Bank page."""
+        try:
+            planner.record_progress(self.ctx.db, self.ctx.library, clock_now())
+            self.ctx.changed("progress")
+        except Exception:  # noqa: BLE001 - a bookkeeping failure must never disturb the day itself
+            log.exception("Could not record today's progress")
+        return GLib.SOURCE_REMOVE
+
+    def _check_closing(self) -> None:
+        """When the day's work is over and tasks are still open, ask what happened to them."""
+        if self._closing is not None or not self.ctx.settings.welcome_seen:
+            return
+        if any(w is not self and w.get_visible() for w in Gtk.Window.list_toplevels()):
+            return  # another dialog is open: do not stack one on top
+        view = self.ctx.today_view()
+        if not planner.closing_due(self.ctx.db, view, view.now):
+            return
+        from .dialogs.closing_dialog import ClosingDialog
+
+        dialog = ClosingDialog(self, self.ctx, view.day)
+        self._closing = dialog
+        dialog.connect("destroy", lambda _d: setattr(self, "_closing", None))
+        dialog.present()
 
     # -- tasks and alarms --------------------------------------------------
 

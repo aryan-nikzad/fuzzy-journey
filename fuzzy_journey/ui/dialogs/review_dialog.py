@@ -20,7 +20,8 @@ class ReviewDialog(Adw.Window):
         self.page = Adw.PreferencesPage()
         self.group = Adw.PreferencesGroup(
             description="Done: finished in time. Tomorrow or Today: it did not fit, so it moves on. "
-            "Cancel: it never needs doing."
+            "Cancel: it never needs doing. You can also add new tasks for a day on the Tomorrow page, "
+            "not only the ones you move on."
         )
         self.page.add(self.group)
         self.toasts = Adw.ToastOverlay(child=self.page)

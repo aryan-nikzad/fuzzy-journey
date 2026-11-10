@@ -274,6 +274,9 @@ class DayPlan:
 #: Night work (after Isha) is chosen in steps of half an hour, from one hour to four.
 OVERTIME_RANGE = (60, 240)
 OVERTIME_STEP = 30
+#: Optional evening work, per day: range and step in minutes.
+EVENING_RANGE = (30, 240)
+EVENING_STEP = 30
 
 #: A recovered day needs at least this long between its start and Isha.
 MIN_RECOVERED_WINDOW = timedelta(hours=1)
@@ -311,6 +314,7 @@ def plan_day(
     flex: timedelta = timedelta(0),
     start: time | None = None,
     overtime: timedelta = timedelta(0),
+    evening_extra: timedelta = timedelta(0),
 ) -> DayPlan:
     """Plan one day from its Fajr and Isha.
 
@@ -320,6 +324,11 @@ def plan_day(
     ``start`` is only used by a *Recovered* day: the moment the day really began.
     Work is then half of the time from ``start`` to Isha, begins at ``start`` and
     may run into the afternoon, so there is no 14:00 limit and no evening block.
+
+    ``evening_extra`` is an optional evening block for any working day (not recommended): it
+    begins at ``evening_start`` (or when the last block ends, if later) and lengthens the
+    evening block when the day already has one. Like all evening work it only pushes bedtime
+    when it runs past Isha, and ``sleep_lost`` shows the price.
 
     ``overtime`` is work added after the last prayer, at night. It begins at Isha
     (or when the last block ends, if later), pushes bedtime out, and is paid for
@@ -348,6 +357,16 @@ def plan_day(
         morning_end = blocks.block1_end.replace(second=0, microsecond=0)
         morning = Span(blocks.block1_start, morning_end) if morning_end > blocks.block1_start else None
         evening = Span(blocks.block2_start, blocks.block2_start + overflow) if overflow > timedelta(0) else None
+
+    extra = _whole_minutes(evening_extra)
+    if kind is not DayKind.REST and extra > timedelta(0):
+        if evening:
+            evening = Span(evening.start, evening.end + extra)
+        else:
+            begin = datetime.combine(day, evening_start)
+            if morning:
+                begin = max(begin, morning.end)
+            evening = Span(begin, begin + extra)
 
     # Evening work is the last resort: it only pushes bedtime when it runs past Isha.
     last_end = evening.end if evening else (morning.end if kind is DayKind.RECOVERED and morning else None)
@@ -393,10 +412,18 @@ class WorkStatus(Enum):
     DONE = "done"
 
 
+#: Title of a pause the user made with the Pause button (an activity such as the gym has its own).
+MANUAL_PAUSE_TITLE = "your pause"
+
+
 @dataclass(frozen=True)
 class Pause:
     span: Span
     title: str
+    #: Made with the Pause button (and nothing else is pausing at the same time).
+    manual: bool = False
+    #: The user has not resumed yet. ``span.end`` is then "now", or later if an activity overlaps.
+    open: bool = False
 
 
 @dataclass(frozen=True)
@@ -407,6 +434,8 @@ class WorkProgress:
     planned: timedelta
     remaining: timedelta
     pause: Pause | None = None
+    #: Focus that no longer fits before bedtime. ``planned`` already excludes it.
+    cut: timedelta = timedelta(0)
 
     @property
     def done(self) -> timedelta:
@@ -417,6 +446,33 @@ class WorkProgress:
         if self.planned <= timedelta(0):
             return 0.0
         return min(1.0, max(0.0, self.done / self.planned))
+
+
+def merge_pauses(raw: Iterable[Pause]) -> list[Pause]:
+    """Sort pauses and merge every overlap into one.
+
+    Where an activity and a manual pause overlap, the merged pause keeps the activity's
+    name (it is what the person is actually doing); it stays *open* while the manual pause is.
+    """
+    merged: list[Pause] = []
+    for pause in sorted(raw, key=lambda p: p.span.start):
+        if not merged or pause.span.start > merged[-1].span.end:
+            merged.append(pause)
+            continue
+        last = merged[-1]
+        if last.manual and not pause.manual:
+            title = pause.title
+        elif pause.manual and not last.manual or last.title == pause.title:
+            title = last.title
+        else:
+            title = "Other activity"
+        merged[-1] = Pause(
+            Span(last.span.start, max(last.span.end, pause.span.end)),
+            title,
+            manual=last.manual and pause.manual,
+            open=last.open or pause.open,
+        )
+    return merged
 
 
 def collect_pauses(activities: Iterable[Activity], anchor: date) -> list[Pause]:
@@ -435,17 +491,35 @@ def collect_pauses(activities: Iterable[Activity], anchor: date) -> list[Pause]:
                 continue
             start, end = span_after(day, activity.start_clock, activity.end_clock)
             raw.append(Pause(Span(start, end), activity.title or "Activity"))
+    return merge_pauses(raw)
 
-    raw.sort(key=lambda p: p.span.start)
-    merged: list[Pause] = []
-    for pause in raw:
-        if not merged or pause.span.start > merged[-1].span.end:
-            merged.append(pause)
-        elif pause.span.end > merged[-1].span.end:
-            last = merged[-1]
-            title = last.title if last.title == pause.title else "Other activity"
-            merged[-1] = Pause(Span(last.span.start, pause.span.end), title)
-    return merged
+
+def with_manual_pauses(
+    pauses: Iterable[Pause], manual: Iterable[tuple[datetime, datetime | None]], now: datetime
+) -> list[Pause]:
+    """Add the user's Pause-button pauses. One still open lasts until ``now``.
+
+    A manual pause is a pause like any other: the work clock and the pomodoro schedule
+    both count only the time outside every pause, so the two can never disagree.
+    """
+    extra = [
+        Pause(Span(paused_at, resumed_at or max(now, paused_at)), MANUAL_PAUSE_TITLE,
+              manual=True, open=resumed_at is None)
+        for paused_at, resumed_at in manual
+    ]
+    return merge_pauses([*pauses, *extra])
+
+
+def productive_between(start: datetime, end: datetime, pauses: Iterable[Pause]) -> timedelta:
+    """Time between ``start`` and ``end`` that is not inside a pause."""
+    if end <= start:
+        return timedelta(0)
+    total = end - start
+    for pause in pauses:
+        overlap = min(end, pause.span.end) - max(start, pause.span.start)
+        if overlap > timedelta(0):
+            total -= overlap
+    return max(timedelta(0), total)
 
 
 def finish_with_pauses(start: datetime, planned: timedelta, pauses: Iterable[Pause]) -> datetime:
@@ -475,15 +549,25 @@ def work_progress(
     planned: timedelta,
     pauses: Iterable[Pause],
     now: datetime,
+    deadline: datetime | None = None,
 ) -> WorkProgress:
-    """Where a block stands at ``now``, excluding paused time."""
+    """Where a block stands at ``now``, excluding paused time.
+
+    ``deadline`` (bedtime) protects the night: however long the pauses were, work never runs
+    past it. Focus that no longer fits is reported as ``cut`` and left out of ``planned``.
+    """
     pauses = list(pauses)
     finish = finish_with_pauses(start, planned, pauses)
+    cut = timedelta(0)
+    if deadline is not None and finish > deadline:
+        finish = max(start, deadline)
+        cut = max(timedelta(0), planned - productive_between(start, finish, pauses))
+        planned -= cut
 
     if now < start:
-        return WorkProgress(WorkStatus.UPCOMING, start, finish, planned, planned)
+        return WorkProgress(WorkStatus.UPCOMING, start, finish, planned, planned, cut=cut)
     if now >= finish:
-        return WorkProgress(WorkStatus.DONE, start, finish, planned, timedelta(0))
+        return WorkProgress(WorkStatus.DONE, start, finish, planned, timedelta(0), cut=cut)
 
     paused = timedelta(0)
     active: Pause | None = None
@@ -492,7 +576,7 @@ def work_progress(
         overlap_end = min(now, pause.span.end, finish)
         if overlap_end > overlap_start:
             paused += overlap_end - overlap_start
-        if pause.span.contains(now):
+        if pause.span.contains(now) or (pause.open and pause.span.start <= now <= pause.span.end):
             active = pause
 
     elapsed = max(timedelta(0), min(now, finish) - start)
@@ -504,4 +588,5 @@ def work_progress(
         planned,
         max(timedelta(0), planned - productive),
         active,
+        cut,
     )

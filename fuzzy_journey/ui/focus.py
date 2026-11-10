@@ -89,7 +89,9 @@ class TaskList(Gtk.Box):
             self.meter_label.set_text("No focus time this day")
         else:
             text = f"{minutes_text(load.planned)} of {minutes_text(focus_minutes)}"
-            if load.over_recommended:
+            if load.over:  # more tasks than the day has focus for: say by how much, not just "over 90%"
+                text += f" · over by {minutes_text(load.planned - focus_minutes)}"
+            elif load.over_recommended:
                 text += f" · over {minutes_text(pomodoro.recommended(focus_minutes))} recommended"
             self.meter_label.set_text(text)
 
@@ -214,7 +216,7 @@ class FocusCard(Gtk.Box):
         self.ctx = ctx
         self.add_css_class("fj-card")
         self._schedule: pomodoro.Schedule | None = None
-        self._pauses: list = []
+        self._pauses: list = []  # every pause of the day, the user's own included
         self._day = clock_now().date()
 
         self.overline = label("", "fj-overline")
@@ -240,9 +242,8 @@ class FocusCard(Gtk.Box):
 
         GLib.timeout_add_seconds(1, self._tick)
 
-    def update(self, schedule: pomodoro.Schedule | None, day: date) -> None:
-        self._schedule, self._day = schedule, day
-        self._pauses = self.ctx.db.pomodoro_pauses(day)
+    def update(self, view) -> None:
+        self._schedule, self._pauses, self._day = view.schedule, list(view.pauses), view.day
         self._render()
 
     def _tick(self) -> bool:
@@ -250,41 +251,54 @@ class FocusCard(Gtk.Box):
             self._render()
         return GLib.SOURCE_CONTINUE
 
+    def _active_pause(self, now):
+        """The pause in effect now: one the user has not ended, or an activity that is under way."""
+        return next((p for p in self._pauses
+                     if p.span.start <= now and (p.open or now < p.span.end)), None)
+
     def _render(self) -> None:
         now = clock_now()
         schedule = self._schedule
         if not schedule or not schedule.segments:
             self.set_visible(False)
             return
-        segments = pomodoro.live_segments(schedule, self._pauses, now)
-        paused = any(end is None for _start, end in self._pauses)
+        segments = schedule.segments  # already laid out around every pause, the user's included
+        pause = self._active_pause(now)
+        manual_open = any(p.open for p in self._pauses)
         cur = pomodoro.current(segments, now)
         upcoming = next((s for s in segments if s.start > now), None)
-        if cur is None and not paused and upcoming is None:
+        if cur is None and not manual_open and upcoming is None:
             self.set_visible(False)  # the day's work is behind us
             return
         self.set_visible(True)
         for b in (self.pause, self.settle, self.plan):
             b.set_visible(False)
 
-        if cur is None and not paused:
+        if cur is None and not manual_open:  # between blocks, or an activity (the gym) holds the day
             self.overline.set_text("NEXT")
             self.timer.set_text(f"in {countdown(upcoming.start - now)}")
-            self.detail.set_text(f"{upcoming.title} at {upcoming.start:%H:%M} · {upcoming.minutes} min")
+            why = f" · paused for {pause.title} until {pause.span.end:%H:%M}" if pause else ""
+            self.detail.set_text(f"{upcoming.title} at {upcoming.start:%H:%M} · {upcoming.minutes} min{why}")
             return
 
+        def left(seg) -> timedelta:
+            # While a pause lasts the block waits: what is left is what was left when it began.
+            if pause is not None:
+                return pomodoro.productive_between(max(pause.span.end, seg.start), seg.end, self._pauses)
+            return seg.end - now
+
         if cur is not None and cur.kind is SegmentKind.PLANNING:
-            self.overline.set_text("PLANNING")
-            self.timer.set_text(self._clock(cur.end - now))
+            self.overline.set_text("PAUSED" if pause else "PLANNING")
+            self.timer.set_text(self._clock(left(cur)))
             self.detail.set_text("Settle today’s tasks, then plan tomorrow.")
             self.settle.set_visible(True)
             self.plan.set_visible(True)
             return
 
-        self.pause.set_visible(True)
-        self.pause.set_label("Resume" if paused else "Pause")
-        (self.pause.add_css_class if paused else self.pause.remove_css_class)("suggested-action")
-        self.pause.set_tooltip_text("Carry on where you stopped" if paused else "Stop the clock, then resume later")
+        self.pause.set_visible(manual_open or pause is None)
+        self.pause.set_label("Resume" if manual_open else "Pause")
+        (self.pause.add_css_class if manual_open else self.pause.remove_css_class)("suggested-action")
+        self.pause.set_tooltip_text("Carry on where you stopped" if manual_open else "Stop the clock, then resume later")
         if cur is None:
             self.overline.set_text("PAUSED")
             self.timer.set_text("—")
@@ -294,11 +308,18 @@ class FocusCard(Gtk.Box):
         then = f" · then {following.title.lower()}" if following else ""
         if cur.kind is SegmentKind.FOCUS:
             number, total = pomodoro.focus_number(segments, cur)
-            self.overline.set_text("PAUSED" if paused else f"FOCUS {number} OF {total}")
+            self.overline.set_text("PAUSED" if pause else f"FOCUS {number} OF {total}")
         else:
-            self.overline.set_text("PAUSED" if paused else cur.title.upper())
-        self.timer.set_text(self._clock(cur.end - now))
-        self.detail.set_text(f"{cur.title} · until {cur.end:%H:%M}{then}")
+            self.overline.set_text("PAUSED" if pause else cur.title.upper())
+        self.timer.set_text(self._clock(left(cur)))
+        if pause is not None and not pause.manual:
+            self.detail.set_text(
+                f"{cur.title} · paused for {pause.title} until {pause.span.end:%H:%M} · ends {cur.end:%H:%M}{then}"
+            )
+        elif pause is not None:
+            self.detail.set_text(f"{cur.title} · ends {cur.end:%H:%M} if you resume now{then}")
+        else:
+            self.detail.set_text(f"{cur.title} · until {cur.end:%H:%M}{then}")
 
     @staticmethod
     def _clock(left: timedelta) -> str:
@@ -307,13 +328,13 @@ class FocusCard(Gtk.Box):
 
     def _on_pause(self, _button) -> None:
         now = clock_now()
-        if any(end is None for _s, end in self._pauses):
+        if any(p.open for p in self._pauses):
             self.ctx.db.resume_pomodoro(self._day, now)
         else:
             self.ctx.db.pause_pomodoro(self._day, now)
         self.ctx.changed("pomodoro")
 
     def _on_settle(self, _button) -> None:
-        from .dialogs.review_dialog import ReviewDialog
+        from .dialogs.closing_dialog import ClosingDialog
 
-        ReviewDialog(self.get_root(), self.ctx, self._day).present()
+        ClosingDialog(self.get_root(), self.ctx, self._day).present()

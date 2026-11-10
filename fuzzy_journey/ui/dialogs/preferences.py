@@ -4,7 +4,7 @@ from dataclasses import replace
 from datetime import datetime
 
 from ...meta import APP_NAME
-from ...models import CALCULATION_METHODS, Location
+from ...models import CALCULATION_METHODS, PROGRESS_UNITS, Location
 from ...paths import APP_DATA_DIR, ensure_data_dir
 from ...pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE
 from ...tasks import ORDER_MODES
@@ -169,6 +169,58 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.order_row.connect("notify::selected", self._on_order)
         plan.add(self.order_row)
         page.add(plan)
+
+        closing = Adw.PreferencesGroup(
+            title="Closing the day",
+            description="What the app does when the day's work is over. These are judgement calls, so each can be changed.",
+        )
+        st = ctx.settings
+        switches = (
+            ("closing_prompt", "Ask about today's tasks when work ends",
+             "Done, tomorrow or cancel for each open task. Never after bedtime."),
+            ("closing_reminder", "Also remind me to plan tomorrow",
+             "Open the check-in even when no task is open."),
+            ("closing_confirm", "Ask before leaving tasks open",
+             "One more click before open tasks wait for tomorrow's review."),
+            ("protect_bedtime", "Never run work past bedtime",
+             "Pauses cannot push work into the night: the focus is cut and planning keeps its place."),
+            ("evening_offer", "Offer evening work",
+             "Show Add evening work… on Today and in the check-in. Not recommended."),
+        )
+        self._flag_rows: dict[str, Adw.SwitchRow] = {}
+        for key, title, subtitle in switches:
+            row = Adw.SwitchRow(title=title, subtitle=subtitle)
+            row.set_active(getattr(st, key))
+            row.connect("notify::active", lambda r, _p, k=key: self._on_flag(k, r.get_active()))
+            self._flag_rows[key] = row
+            closing.add(row)
+        snooze = Adw.SpinRow.new_with_range(10, 120, 5)
+        snooze.set_title("Ask again after (minutes)")
+        snooze.set_subtitle("When you choose Ask me later, or press Escape.")
+        snooze.set_value(st.closing_snooze)
+        snooze.connect("notify::value", lambda r, _p: setattr(st, "closing_snooze", int(r.get_value())))
+        closing.add(snooze)
+        page.add(closing)
+
+        done = Adw.PreferencesGroup(
+            title="Work done",
+            description="The Bank page lists the focus you really worked each day: the time the clock ran, "
+            "without pauses or breaks. Show it as any of these.",
+        )
+        chosen = ctx.settings.progress_units
+        self._unit_rows: dict[str, Adw.SwitchRow] = {}
+        subtitles = {
+            "hours": "For example 2h 40m.",
+            "percent": "Compared with the focus time a Steady day offers.",
+            "blocks": "Focus blocks with decimals, such as 3.4.",
+        }
+        for key, title in PROGRESS_UNITS.items():
+            row = Adw.SwitchRow(title=title, subtitle=subtitles[key])
+            row.set_active(key in chosen)
+            row.connect("notify::active", self._on_units)
+            self._unit_rows[key] = row
+            done.add(row)
+        page.add(done)
         self._sync_focus_rows()
 
     def _sync_focus_rows(self) -> None:
@@ -189,6 +241,18 @@ class PreferencesWindow(Adw.PreferencesWindow):
 
     def _on_pomo_sound(self, sound) -> None:
         self.ctx.settings.pomodoro_sound = sound
+
+    def _on_flag(self, key: str, value: bool) -> None:
+        setattr(self.ctx.settings, key, value)
+        self.ctx.changed("day")
+
+    def _on_units(self, *_args) -> None:
+        chosen = [key for key, row in self._unit_rows.items() if row.get_active()]
+        if not chosen:  # something must be shown: fall back to hours
+            self._unit_rows["hours"].set_active(True)
+            return
+        self.ctx.settings.progress_units = chosen
+        self.ctx.changed("progress")
 
     def _on_order(self, row, _pspec) -> None:
         self.ctx.settings.task_order = ORDER_MODES[row.get_selected()]

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from ...rhythm import DayKind, WorkStatus
 from ...timeutil import countdown, human_duration
 from ...timeutil import now as clock_now
@@ -89,7 +91,9 @@ class TodayPage(Page):
         self.overslept.connect("clicked", lambda _b: self._recover(None))
         self.night_button = Gtk.Button(label="Work into the night…", tooltip_text="Not recommended")
         self.night_button.connect("clicked", lambda _b: self._night(0))
-        for b in (self.overslept, self.night_button):
+        self.evening_button = Gtk.Button(label="Add evening work…", tooltip_text="Not recommended")
+        self.evening_button.connect("clicked", lambda _b: self._evening(0))
+        for b in (self.overslept, self.evening_button, self.night_button):
             b.add_css_class("flat")
             b.add_css_class("caption")
             self.extras.append(b)
@@ -112,8 +116,18 @@ class TodayPage(Page):
         self.night_row.add_suffix(night_change)
         self.night_row.add_suffix(night_remove)
         kind_box.append(self.night_row)
+        self.evening_row = Adw.ActionRow(title="Evening work", activatable=False)
+        self.evening_row.add_css_class("card")
+        evening_change = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
+        evening_remove = Gtk.Button(label="Remove", valign=Gtk.Align.CENTER, tooltip_text="Rest instead")
+        evening_change.connect("clicked", lambda _b: self._evening(self._evening_minutes))
+        evening_remove.connect("clicked", self._on_remove_evening)
+        self.evening_row.add_suffix(evening_change)
+        self.evening_row.add_suffix(evening_remove)
+        kind_box.append(self.evening_row)
         self._start = None
         self._overtime = 0
+        self._evening_minutes = 0
         self.day_box.append(kind_box)
 
         # -- tasks
@@ -151,6 +165,15 @@ class TodayPage(Page):
 
         OvertimeDialog(self.get_root(), self.ctx, clock_now().date(), current).present()
 
+    def _evening(self, current: int) -> None:
+        from ..dialogs.evening_dialog import EveningDialog
+
+        EveningDialog(self.get_root(), self.ctx, clock_now().date(), current).present()
+
+    def _on_remove_evening(self, _button) -> None:
+        self.ctx.db.set_day_evening(clock_now().date(), 0)
+        self.ctx.changed("day")
+
     def _on_remove_night(self, _button) -> None:
         self.ctx.db.set_day_overtime(clock_now().date(), 0)
         self.ctx.changed("day")
@@ -187,7 +210,7 @@ class TodayPage(Page):
         self.stack.set_visible_child_name("day")
         self._render_header(view)
         self._render_hero(view)
-        self.card.update(view.schedule, view.day)
+        self.card.update(view)
         self._render_shape(view)
         self.tasks.show_day(view.day, view.schedule.focus_minutes if view.schedule else 0)
         self._render_timeline(view)
@@ -209,7 +232,22 @@ class TodayPage(Page):
         night = view.plan.overtime if view.plan else None
         self.night_button.set_visible(view.plan is not None and view.kind is not DayKind.REST and not night)
         self.night_row.set_visible(night is not None)
-        self.extras.set_visible(self.overslept.get_visible() or self.night_button.get_visible())
+        self._evening_minutes = entry.evening if entry else 0
+        self.evening_button.set_visible(
+            view.plan is not None and view.kind is not DayKind.REST and not self._evening_minutes
+            and self.ctx.settings.evening_offer
+        )
+        self.evening_row.set_visible(view.plan is not None and view.kind is not DayKind.REST and bool(self._evening_minutes))
+        if self._evening_minutes and view.plan and view.plan.evening:
+            block = view.plan.evening
+            lost = f" · {human_duration(view.sleep_lost)} of sleep given up" if view.sleep_lost.total_seconds() > 0 else ""
+            self.evening_row.set_subtitle(
+                f"{human_duration(timedelta(minutes=self._evening_minutes))} added · evening ends {block.end:%H:%M} "
+                f"· not recommended · bed {view.bedtime:%H:%M}{lost}"
+            )
+        self.extras.set_visible(
+            self.overslept.get_visible() or self.evening_button.get_visible() or self.night_button.get_visible()
+        )
         if night:
             lost = f" · {human_duration(view.sleep_lost)} of sleep given up" if view.sleep_lost.total_seconds() > 0 else ""
             self.night_row.set_subtitle(
@@ -243,14 +281,25 @@ class TodayPage(Page):
                 )
             elif p.status is WorkStatus.PAUSED and p.pause:
                 self.hero.set_text(human_duration(view.work_remaining))
-                self.hero_sub.set_text(
-                    f"Paused for {p.pause.title} until {p.pause.span.end:%H:%M} · finishes {p.end:%H:%M}"
-                )
+                if p.pause.manual:
+                    why = "Paused by you"
+                    when = f"finishes {p.end:%H:%M} if you resume now"
+                else:
+                    why = f"Paused for {p.pause.title} until {p.pause.span.end:%H:%M}"
+                    when = f"finishes {p.end:%H:%M}"
+                self.hero_sub.set_text(f"{why} · {when}" + self._cut_note(view))
             else:
                 self.hero.set_text(human_duration(view.work_remaining))
                 later = [w for w in view.work if w.progress.start > p.start]
                 tail = f" · then {later[0].title.lower()} at {later[0].progress.start:%H:%M}" if later else ""
-                self.hero_sub.set_text(f"{focus.title} · finishes {p.end:%H:%M}{tail}")
+                self.hero_sub.set_text(f"{focus.title} · finishes {p.end:%H:%M}{tail}" + self._cut_note(view))
+
+    @staticmethod
+    def _cut_note(view: TodayView) -> str:
+        """Pauses can push the work towards bedtime; work never runs past it, so say what was cut."""
+        if view.work_cut.total_seconds() <= 0:
+            return ""
+        return f" · {human_duration(view.work_cut)} cut to protect your sleep"
 
     def _render_shape(self, view: TodayView) -> None:
         if view.wake and view.bedtime:
@@ -273,6 +322,8 @@ class TodayPage(Page):
                  f"{human_duration(view.sleep)} of sleep"]
         if view.sleep_lost.total_seconds() > 0:
             parts.append(f"{human_duration(view.sleep_lost)} given up")
+        if view.worked.total_seconds() >= 60:
+            parts.append(f"{human_duration(view.worked)} focused so far")
         self.summary.set_text(" · ".join(parts))
 
     def _render_timeline(self, view: TodayView) -> None:

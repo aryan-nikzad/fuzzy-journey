@@ -18,7 +18,7 @@ gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from fuzzy_journey import database
-from fuzzy_journey.alarm_engine import effective_routine_end, next_occurrence, routine_work_state
+from fuzzy_journey.alarm_engine import effective_routine_end, routine_work_state
 from fuzzy_journey.notifications import SOUND_PRESETS, play_alarm_sound
 from fuzzy_journey.paths import APP_DATA_DIR, APP_ROOT, ensure_data_dir, schedule_path
 
@@ -211,7 +211,7 @@ def choose_audio_file(parent: Gtk.Window, callback) -> None:
 
 
 class AlarmForm(Gtk.Window):
-    def __init__(self, parent: "MainWindow", alarm: dict | None = None):
+    def __init__(self, parent: MainWindow, alarm: dict | None = None):
         super().__init__(transient_for=parent, modal=True)
         self.parent = parent
         self.alarm = alarm

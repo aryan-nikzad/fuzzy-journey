@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+- **One pause model.** The Pause button used to move only the pomodoro blocks while the work clock ignored it, so Today could say *39 min left, finishes 16:39* while the focus block had 47 minutes left and ended in the middle of the gym. A manual pause is now a pause like any other: the work clock and the pomodoro schedule are laid out from the same pauses and always agree. A pause that overlaps an activity merges with it and is named for the activity.
+- **Nothing runs past bedtime.** However long the pauses, work and planning stop at bedtime. The focus that no longer fits is cut (planning keeps its place at the end) and Today says how much was cut.
+- The Tasks meter says *over by 2h 15m* when tasks exceed the day's focus time, not only that they pass the recommended 90%.
+- The Focus card shows *Paused* with a frozen timer whenever the day is paused (the gym as well as the Pause button), and what it is waiting for.
+
+### Closing the day
+- When the day's work is over (planning begins) and tasks are still open, the app asks once what happened to each: Done, Tomorrow or Cancel. *Ask me in 30 min* or Escape asks again later; *Close the day* with open tasks needs a second click and leaves them for tomorrow's review. Never after bedtime.
+- The same window shows tomorrow's load and says you can add new tasks for tomorrow, not only moved ones. The next-day review says so too.
+
+### Evening work
+- **Add evening work…** (30 minutes to four hours) is available on any working day, not recommended, with bedtime and sleep given up shown first. Also offered from the closing window. Planning moves to the end of the evening. Schema 6 adds `day_entries.evening_minutes`.
+
+### Settings for judgement calls
+- Preferences → Focus → *Closing the day*: the automatic check-in, a reminder to plan tomorrow when nothing is open, the confirmation before leaving tasks open, never running work past bedtime, offering evening work, and the *Ask me later* delay. Defaults follow the philosophy (all on except the reminder; 30 minutes).
+
+### Work done
+- The Bank page lists the focus the clock really ran each day (no pauses, breaks or planning) as hours, percent of a Steady day's focus, focus blocks with decimals, or any mix, chosen in Preferences → Focus. Recorded every minute by the app or the alarm service; schema 6 adds the `day_progress` table.
+
 ### Recovered day
 - **I overslept…** on a Steady day starts the day at the time you really woke. Work is 50% of the time you are awake (start to Isha) and may run into the afternoon, so the plan is rescued instead of lost. It counts as Steady for the bank, never shortens the night, and pomodoro, planning and task room follow the new window. *Change* and *Undo* are on Today; recovered days are outlined in the Bank calendar.
 - Stored as a Steady entry with a start time (schema 3 adds one column), so older versions simply see a Steady day.
@@ -24,7 +43,7 @@
 
 ### Changed
 - Screens are now Today, Tomorrow, Routine, Bank, Alarms, Prayers (`Ctrl+1`…`Ctrl+6`). The tab switcher moves to a bottom bar when the window is too narrow for six tabs.
-- Database schema 5 adds the `tasks` and `pomodoro_pauses` tables, a day start time, night work and a task kind. Existing data is untouched.
+- Database schema 6 adds the `tasks`, `pomodoro_pauses` and `day_progress` tables, a day start time, night work, evening work and a task kind. Existing data is untouched.
 
 ## 2.0.0
 

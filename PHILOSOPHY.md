@@ -69,3 +69,18 @@ It is a rescue, not a plan. It is never offered next to Steady, Push and Rest; i
 
 *Protect the night* is a rule you can break on purpose. On any working day you can add one to four hours of **night work** after Isha. It is never the default and it is never offered quietly: the app first suggests moving tasks to tomorrow, which is almost always better for the work, for discipline and for health. If you still choose it, its price is shown in the same place as Push evening work: sleep given up. It is neutral for the bank, so it earns nothing.
 
+## Evening work: optional, never recommended
+
+Some days go elsewhere: you slept long, started late, or paused for a long while. On any working day an **evening block** of half an hour to four hours can give the missing focus time back. It begins at your evening time, and like all evening work it only pushes bedtime when it runs past Isha, with the sleep given up shown beside it. It is neutral for the bank, so it earns nothing, and it is not recommended: the better first move is almost always to let what did not fit wait for tomorrow. Planning moves to the end of the evening block.
+
+## Closing the day
+
+The last slot of the day's work is **planning**, and it does two things: it settles today's tasks and it looks at tomorrow. When it begins (or, with planning off, when the last block ends) and tasks are still open, the app asks, once, what happened to each: done, moved to tomorrow, or cancelled. It asks firmly but never traps you: you can ask again in half an hour, or leave the tasks for tomorrow's review after a second, deliberate click. It never asks after bedtime. Tomorrow's list is not only what you move on: you can add new tasks for it at the same moment.
+
+## One pause, and a night that is never traded
+
+A pause is a pause, whether it is a call, the gym or the Pause button. The work clock and the pomodoro schedule count the same time outside every pause, so they can never disagree. And nothing runs past bedtime: when pauses push the work towards the night, the focus is cut short there, planning keeps its place at the end, and the app says how much was cut.
+
+## Work done
+
+Each day records the focus the clock really ran: no pauses, no breaks, no planning. It is shown on the Bank page as hours, as a percent of the focus time a Steady day offers, as focus blocks with decimals, or any mix of these. It is a mirror, not a score: no streaks, no targets, nothing to win.

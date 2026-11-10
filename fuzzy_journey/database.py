@@ -9,16 +9,18 @@ created, and is compatible with databases written by 1.x releases.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from .models import (
+    PROGRESS_UNITS,
     SOUND_PRESETS,
     Activity,
     Alarm,
     DayEntry,
+    DayProgress,
     FiredEvent,
     Location,
     PrayerAlarm,
@@ -32,7 +34,7 @@ from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
 from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def _now_iso() -> str:
@@ -189,8 +191,30 @@ def _migrate_to_v5(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'")
 
 
+def _migrate_to_v6(conn: sqlite3.Connection) -> None:
+    """Optional evening work per day, and what each day really had: focus worked, closing state."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(day_entries)")}
+    if "evening_minutes" not in existing:
+        conn.execute("ALTER TABLE day_entries ADD COLUMN evening_minutes INTEGER NOT NULL DEFAULT 0")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS day_progress (
+            day_date TEXT PRIMARY KEY,
+            worked_seconds INTEGER NOT NULL DEFAULT 0,
+            capacity_seconds INTEGER NOT NULL DEFAULT 0,
+            steady_seconds INTEGER NOT NULL DEFAULT 0,
+            block_minutes INTEGER NOT NULL DEFAULT 50,
+            final INTEGER NOT NULL DEFAULT 0,
+            closing TEXT NOT NULL DEFAULT '',
+            snooze_until TEXT,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 #: Append new migrations here; never edit an old one.
-MIGRATIONS = (_migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5)
+MIGRATIONS = (_migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6)
 
 
 # --------------------------------------------------------------------------
@@ -467,6 +491,7 @@ class Database:
                    ON CONFLICT(day_date) DO UPDATE SET
                        day_type=excluded.day_type, notes=excluded.notes, updated_at=excluded.updated_at,
                        overtime_minutes=CASE WHEN excluded.day_type='off' THEN 0 ELSE day_entries.overtime_minutes END,
+                       evening_minutes=CASE WHEN excluded.day_type='off' THEN 0 ELSE day_entries.evening_minutes END,
                        start_time=CASE WHEN :recovered
                                        THEN COALESCE(excluded.start_time, day_entries.start_time) ELSE NULL END""",
                 {"day": day.isoformat(), "code": code, "note": note, "now": _now_iso(),
@@ -484,10 +509,21 @@ class Database:
                 (day.isoformat(), _now_iso(), max(0, minutes)),
             )
 
+    def set_day_evening(self, day: date, minutes: int) -> None:
+        """Set (or, with 0, remove) the optional evening work of a day, keeping its kind."""
+        with self.transaction() as conn:
+            conn.execute(
+                """INSERT INTO day_entries(day_date, day_type, notes, updated_at, evening_minutes)
+                   VALUES (?, '50', '', ?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET
+                       evening_minutes=excluded.evening_minutes, updated_at=excluded.updated_at""",
+                (day.isoformat(), _now_iso(), max(0, minutes)),
+            )
+
     def day_entries(self, start: date, end: date) -> dict[date, DayEntry]:
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT day_date, day_type, notes, start_time, overtime_minutes FROM day_entries "
+                "SELECT day_date, day_type, notes, start_time, overtime_minutes, evening_minutes FROM day_entries "
                 "WHERE day_date BETWEEN ? AND ? ORDER BY day_date",
                 (start.isoformat(), end.isoformat()),
             ).fetchall()
@@ -500,7 +536,10 @@ class Database:
                     started, kind = parse_clock(row["start_time"]), DayKind.RECOVERED
                 except ValueError:
                     pass
-            entries[day] = DayEntry(day, kind, row["notes"] or "", started, int(row["overtime_minutes"] or 0))
+            entries[day] = DayEntry(
+                day, kind, row["notes"] or "", started,
+                int(row["overtime_minutes"] or 0), int(row["evening_minutes"] or 0),
+            )
         return entries
 
     def day_kind(self, day: date) -> DayKind:
@@ -615,6 +654,87 @@ class Database:
                 )
             elif task.status is TaskStatus.CARRIED and status is not TaskStatus.CARRIED:
                 conn.execute("DELETE FROM tasks WHERE origin_id=? AND status='unset'", (task_id,))
+
+    # -- what each day really had ------------------------------------------
+
+    def record_progress(
+        self, day: date, worked: timedelta, capacity: timedelta, steady: timedelta, block_minutes: int,
+        *, final: bool = False,
+    ) -> None:
+        """Remember how much focus ``day`` had. A day that is final is never changed again."""
+        with self.transaction(immediate=True) as conn:
+            conn.execute(
+                """INSERT INTO day_progress(day_date, worked_seconds, capacity_seconds, steady_seconds,
+                                            block_minutes, final, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET
+                       worked_seconds=excluded.worked_seconds, capacity_seconds=excluded.capacity_seconds,
+                       steady_seconds=excluded.steady_seconds, block_minutes=excluded.block_minutes,
+                       final=excluded.final, updated_at=excluded.updated_at
+                   WHERE day_progress.final=0""",
+                (day.isoformat(), int(worked.total_seconds()), int(capacity.total_seconds()),
+                 int(steady.total_seconds()), int(block_minutes), int(final), _now_iso()),
+            )
+
+    def progress(self, start: date, end: date) -> list[DayProgress]:
+        """The recorded days from ``start`` to ``end``, newest first."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM day_progress WHERE day_date BETWEEN ? AND ? ORDER BY day_date DESC",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return [
+            DayProgress(
+                date.fromisoformat(r["day_date"]), timedelta(seconds=r["worked_seconds"]),
+                timedelta(seconds=r["capacity_seconds"]), timedelta(seconds=r["steady_seconds"]),
+                int(r["block_minutes"]), bool(r["final"]),
+            )
+            for r in rows
+        ]
+
+    def open_progress_days(self, before: date) -> list[date]:
+        """Recorded days earlier than ``before`` whose figure is not yet final."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT day_date FROM day_progress WHERE day_date<? AND final=0 AND updated_at IS NOT NULL "
+                "AND (worked_seconds>0 OR capacity_seconds>0) ORDER BY day_date",
+                (before.isoformat(),),
+            ).fetchall()
+        return [date.fromisoformat(r["day_date"]) for r in rows]
+
+    def is_final(self, day: date) -> bool:
+        with self.connection() as conn:
+            row = conn.execute("SELECT final FROM day_progress WHERE day_date=?", (day.isoformat(),)).fetchone()
+        return bool(row and row["final"])
+
+    # -- closing the day: settling its tasks -------------------------------
+
+    def closing_state(self, day: date) -> tuple[bool, datetime | None]:
+        """``(closed, ask_again_at)``: the person finished (or skipped) the check-in, or asked to be asked later."""
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT closing, snooze_until FROM day_progress WHERE day_date=?", (day.isoformat(),)
+            ).fetchone()
+        if row is None:
+            return False, None
+        until = datetime.fromisoformat(row["snooze_until"]) if row["snooze_until"] else None
+        return row["closing"] == "closed", until
+
+    def _set_closing(self, day: date, closing: str, until: datetime | None) -> None:
+        with self.transaction(immediate=True) as conn:
+            conn.execute(
+                """INSERT INTO day_progress(day_date, closing, snooze_until, updated_at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET closing=excluded.closing, snooze_until=excluded.snooze_until""",
+                (day.isoformat(), closing, until.isoformat(timespec="seconds") if until else None, _now_iso()),
+            )
+
+    def close_day(self, day: date) -> None:
+        """The check-in is over for ``day``: it will not ask again."""
+        self._set_closing(day, "closed", None)
+
+    def snooze_closing(self, day: date, until: datetime) -> None:
+        """Ask again at ``until``."""
+        self._set_closing(day, "", until)
 
     # -- pomodoro pauses ---------------------------------------------------
 
@@ -768,6 +888,83 @@ class Settings:
     @task_order.setter
     def task_order(self, value: str) -> None:
         self.set("task_order", value)
+
+    # closing the day, evening work, bedtime ----------------------------------
+    # Each of these is a judgement call, so each can be changed; the defaults are the
+    # behaviour the philosophy recommends.
+
+    def _flag(self, key: str, default: bool) -> bool:
+        return self.get(key, "1" if default else "0") == "1"
+
+    @property
+    def closing_prompt(self) -> bool:
+        """Ask about today's tasks by itself when the day's work is over."""
+        return self._flag("closing_prompt", True)
+
+    @closing_prompt.setter
+    def closing_prompt(self, value: bool) -> None:
+        self.set("closing_prompt", "1" if value else "0")
+
+    @property
+    def closing_reminder(self) -> bool:
+        """Open the check-in even when no task is open, to remind you to plan tomorrow."""
+        return self._flag("closing_reminder", False)
+
+    @closing_reminder.setter
+    def closing_reminder(self, value: bool) -> None:
+        self.set("closing_reminder", "1" if value else "0")
+
+    @property
+    def closing_confirm(self) -> bool:
+        """Ask once more before leaving open tasks for tomorrow."""
+        return self._flag("closing_confirm", True)
+
+    @closing_confirm.setter
+    def closing_confirm(self, value: bool) -> None:
+        self.set("closing_confirm", "1" if value else "0")
+
+    @property
+    def closing_snooze(self) -> int:
+        """Minutes until the check-in asks again after *Ask me later*."""
+        try:
+            return min(120, max(10, int(self.get("closing_snooze", "30"))))
+        except ValueError:
+            return 30
+
+    @closing_snooze.setter
+    def closing_snooze(self, value: int) -> None:
+        self.set("closing_snooze", str(int(value)))
+
+    @property
+    def protect_bedtime(self) -> bool:
+        """Never let pauses push work (and planning) past bedtime."""
+        return self._flag("protect_bedtime", True)
+
+    @protect_bedtime.setter
+    def protect_bedtime(self, value: bool) -> None:
+        self.set("protect_bedtime", "1" if value else "0")
+
+    @property
+    def evening_offer(self) -> bool:
+        """Offer optional evening work (Today page and the check-in)."""
+        return self._flag("evening_offer", True)
+
+    @evening_offer.setter
+    def evening_offer(self, value: bool) -> None:
+        self.set("evening_offer", "1" if value else "0")
+
+    # what is shown about each day's real work ------------------------------
+
+    @property
+    def progress_units(self) -> tuple[str, ...]:
+        """How the work done each day is shown: any of hours, percent, blocks."""
+        raw = self.get("progress_units", "hours,percent,blocks")
+        chosen = tuple(u for u in raw.split(",") if u in PROGRESS_UNITS)
+        return chosen or ("hours",)
+
+    @progress_units.setter
+    def progress_units(self, value: Iterable[str]) -> None:
+        self.set("progress_units", ",".join(u for u in PROGRESS_UNITS if u in set(value)))
 
     # time bank ------------------------------------------------------------
 

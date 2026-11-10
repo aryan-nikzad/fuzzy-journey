@@ -8,7 +8,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 try:
@@ -323,6 +323,174 @@ class UiSmokeTests(unittest.TestCase):
         self.assertIsNone(self.ctx.db.tasks_on(tomorrow) and next(
             (t for t in self.ctx.db.tasks_on(tomorrow) if t.id == copy.id), None))
         self.ctx.changed("tasks")
+
+    # -- closing the day, evening work, work done --------------------------
+
+    def _pin(self, stamp):
+        saved = os.environ.get("FUZZY_JOURNEY_NOW")
+        os.environ["FUZZY_JOURNEY_NOW"] = stamp
+        self.addCleanup(lambda: os.environ.__setitem__("FUZZY_JOURNEY_NOW", saved) if saved
+                        else os.environ.pop("FUZZY_JOURNEY_NOW", None))
+
+    def _clear_dialogs(self):
+        """Other tests leave windows open; the check-in rightly waits for them, so close them."""
+        for w in Gtk.Window.list_toplevels():
+            if w is not self.window and w.get_visible():
+                w.destroy()
+        self.window._closing = None
+
+    def test_the_check_in_opens_once_when_work_is_over_and_settling_closes_the_day(self):
+        from fuzzy_journey.models import Task, TaskStatus
+        from fuzzy_journey.ui.dialogs.closing_dialog import ClosingDialog
+
+        self._pin("2026-11-02T11:20")  # planning began at 11:11
+        self._clear_dialogs()
+        task = Task("Write the report", 30, date(2026, 11, 2))
+        self.ctx.db.save_task(task)
+        self.addCleanup(lambda: self.ctx.db.delete_task(task.id))
+        self.window._check_closing()
+        dialog = self.window._closing
+        self.assertIsInstance(dialog, ClosingDialog)
+        self.window._check_closing()
+        self.assertIs(self.window._closing, dialog)  # never a second one on top
+        self.assertEqual(len(dialog._rows), 1)
+        self.assertTrue(dialog.evening_group.get_visible())
+        self.assertIn("add new tasks for tomorrow", dialog.tomorrow_row.get_subtitle())
+        dialog._settle(task, TaskStatus.DONE)
+        self.assertEqual(dialog.status.get_title(), "Everything is settled")
+        dialog._on_close_day(None)
+        self.assertEqual(self.ctx.db.closing_state(date(2026, 11, 2)), (True, None))
+        self.window._closing = None
+        self.window._check_closing()
+        self.assertIsNone(self.window._closing)  # nothing open, and the day is closed
+
+    def test_escaping_the_check_in_only_asks_again_later(self):
+        from datetime import datetime
+
+        from fuzzy_journey.models import Task
+
+        self._pin("2026-11-02T11:20")
+        self._clear_dialogs()
+        day = date(2026, 11, 2)
+        task = Task("Still open", 30, day)
+        self.ctx.db.save_task(task)
+        self.addCleanup(lambda: (self.ctx.db.delete_task(task.id), self.ctx.db.snooze_closing(day, datetime(2000, 1, 1))))
+        self.window._check_closing()
+        dialog = self.window._closing
+        dialog.close()
+        closed, until = self.ctx.db.closing_state(day)
+        self.assertFalse(closed)
+        self.assertEqual(until, datetime(2026, 11, 2, 11, 50))
+        self.window._closing = None
+        self.window._check_closing()
+        self.assertIsNone(self.window._closing)  # snoozed for half an hour
+        self._pin("2026-11-02T11:51")
+        self.window._check_closing()
+        self.assertIsNotNone(self.window._closing)
+        self.window._closing.destroy()
+        self.window._closing = None
+
+    def test_evening_work_can_be_added_changed_and_removed_from_the_today_page(self):
+        from fuzzy_journey.ui.dialogs.evening_dialog import EveningDialog
+
+        self._pin("2026-11-02T11:20")
+        day, page = date(2026, 11, 2), self.window.pages["today"]
+        self.assertTrue(page.evening_button.get_visible())
+        dialog = EveningDialog(self.window, self.ctx, day, 0)
+        dialog.length.set_value(60)
+        self.assertTrue(dialog.save_button.get_sensitive())
+        self.assertIn("given up", dialog.cost.get_text())  # it says what it costs
+        dialog._on_save(None)
+        self.assertEqual(self.ctx.db.day_entries(day, day)[day].evening, 60)
+        self.assertTrue(page.evening_row.get_visible() and not page.evening_button.get_visible())
+        self.assertIn("not recommended", page.evening_row.get_subtitle())
+        page._on_remove_evening(None)
+        self.assertTrue(page.evening_button.get_visible() and not page.evening_row.get_visible())
+
+    def test_an_evening_that_already_started_cannot_be_added(self):
+        from fuzzy_journey.ui.dialogs.evening_dialog import EveningDialog
+
+        self._pin("2026-11-02T20:00")  # the evening block would have begun at 18:00
+        dialog = EveningDialog(self.window, self.ctx, date(2026, 11, 2), 0)
+        self.assertFalse(dialog.save_button.get_sensitive())
+        self.assertIn("has passed", dialog.cost.get_text())
+        dialog.destroy()
+
+    def test_a_manual_pause_shows_paused_with_a_frozen_timer_and_resume(self):
+        from datetime import datetime
+
+        self._pin("2026-11-02T10:30")
+        day, card = date(2026, 11, 2), self.window.pages["today"].card
+        self.ctx.db.pause_pomodoro(day, datetime(2026, 11, 2, 10, 28))
+        self.addCleanup(lambda: self.ctx.db.resume_pomodoro(day, datetime(2026, 11, 2, 10, 31)))
+        self.ctx.changed("pomodoro")
+        self.assertEqual(card.overline.get_text(), "PAUSED")
+        self.assertEqual(card.pause.get_label(), "Resume")
+        before = card.timer.get_text()
+        self._pin("2026-11-02T10:34")
+        self.ctx.changed("pomodoro")
+        self.assertEqual(card.timer.get_text(), before)  # the block waits; nothing runs down
+        self.assertEqual(self.window.pages["today"].hero_sub.get_text().startswith("Paused by you"), True)
+
+    def test_the_bank_lists_the_work_done_in_the_chosen_units(self):
+        from fuzzy_journey.ui.dialogs.preferences import PreferencesWindow
+
+        self._pin("2026-11-02T11:20")
+        self.window._record_progress()
+        bank = self.window.pages["bank"]
+        self.assertGreaterEqual(len(bank._done_rows), 1)
+        shown = bank._done_rows[0].get_subtitle()
+        self.assertEqual(shown.count("·"), 2)  # hours · percent · blocks
+        prefs = PreferencesWindow(self.window, self.ctx)
+        try:
+            prefs._unit_rows["percent"].set_active(False)
+            prefs._unit_rows["blocks"].set_active(False)
+            self.assertEqual(self.ctx.settings.progress_units, ("hours",))
+            prefs._unit_rows["hours"].set_active(False)  # something must stay on
+            self.assertEqual(self.ctx.settings.progress_units, ("hours",))
+            self.assertNotIn("·", bank._done_rows[0].get_subtitle())
+        finally:
+            self.ctx.settings.progress_units = ["hours", "percent", "blocks"]
+            prefs.destroy()
+
+    def test_the_tasks_meter_says_by_how_much_a_day_is_over(self):
+        from fuzzy_journey.models import Task
+
+        self._pin("2026-11-02T10:15")
+        day, page = date(2026, 11, 2), self.window.pages["today"]
+        focus = self.ctx.today_view().schedule.focus_minutes
+        big = Task("Too big", focus + 45, day)
+        self.ctx.db.save_task(big)
+        self.addCleanup(lambda: (self.ctx.db.delete_task(big.id), self.ctx.changed("tasks")))
+        self.ctx.changed("tasks")
+        self.assertIn("over by 45m", page.tasks.meter_label.get_text())
+
+    def test_the_judgement_call_switches_change_the_behaviour(self):
+        from fuzzy_journey.models import Task
+        from fuzzy_journey.ui.dialogs.preferences import PreferencesWindow
+
+        self._pin("2026-11-02T11:20")
+        self._clear_dialogs()
+        day, page = date(2026, 11, 2), self.window.pages["today"]
+        task = Task("Open task", 30, day)
+        self.ctx.db.save_task(task)
+        prefs = PreferencesWindow(self.window, self.ctx)
+
+        def restore():
+            for key, value in (("closing_prompt", True), ("evening_offer", True)):
+                setattr(self.ctx.settings, key, value)
+            self.ctx.db.delete_task(task.id)
+            self.ctx.db.snooze_closing(day, datetime(2000, 1, 1))
+            prefs.destroy()
+            self.ctx.changed("day")
+        self.addCleanup(restore)
+        prefs._flag_rows["closing_prompt"].set_active(False)
+        self.window._check_closing()
+        self.assertIsNone(self.window._closing)  # it no longer asks by itself
+        prefs._flag_rows["evening_offer"].set_active(False)
+        self.assertFalse(page.evening_button.get_visible())
+        prefs._flag_rows["evening_offer"].set_active(True)
+        self.assertTrue(page.evening_button.get_visible())
 
     def test_theme_switch(self):
         from fuzzy_journey.ui.dialogs.preferences import apply_theme
