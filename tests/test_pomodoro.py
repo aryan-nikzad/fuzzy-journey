@@ -99,6 +99,16 @@ class PauseTests(unittest.TestCase):
         self.assertEqual(live[0].end, START + timedelta(minutes=57))
         self.assertEqual(live[1].start, START + timedelta(minutes=57))
 
+    def test_focus_number_survives_a_resumed_pause(self):
+        # Regression: the card looked the shifted block up in the unshifted schedule and crashed.
+        pauses = [(self.at, self.at + timedelta(minutes=7))]
+        now = START + timedelta(hours=1, minutes=20)  # inside the second focus block
+        live = pomodoro.live_segments(self.schedule, pauses, now)
+        cur = pomodoro.current(live, now)
+        self.assertEqual(cur.kind, pomodoro.SegmentKind.FOCUS)
+        self.assertNotIn((cur.start, cur.kind), [(s.start, s.kind) for s in self.schedule.segments])
+        self.assertEqual(pomodoro.focus_number(live, cur), (2, 3))
+
     def test_while_paused_the_current_block_waits(self):
         now = self.at + timedelta(minutes=9)
         live = pomodoro.live_segments(self.schedule, [(self.at, None)], now)

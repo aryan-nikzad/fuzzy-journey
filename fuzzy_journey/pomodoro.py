@@ -210,6 +210,17 @@ def current(segments: Iterable[Segment], now: datetime) -> Segment | None:
     return next((s for s in segments if s.start <= now < s.end), None)
 
 
+def focus_number(segments: Sequence[Segment], seg: Segment) -> tuple[int, int]:
+    """``(n, total)``: ``seg`` is the n-th of ``total`` focus blocks.
+
+    ``seg`` must come from ``segments`` itself. After a manual pause the live segments are
+    shifted, so it can not be matched against the unshifted schedule by its start time.
+    """
+    blocks = [s for s in segments if s.kind is SegmentKind.FOCUS]
+    number = next((i for i, s in enumerate(blocks) if s is seg), 0) + 1
+    return number, len(blocks)
+
+
 # --------------------------------------------------------------------------
 # Alarms
 # --------------------------------------------------------------------------

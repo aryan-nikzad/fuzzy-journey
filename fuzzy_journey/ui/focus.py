@@ -290,13 +290,11 @@ class FocusCard(Gtk.Box):
             self.timer.set_text("—")
             self.detail.set_text("Resume when you are ready.")
             return
-        focus_blocks = [s for s in schedule.segments if s.kind is SegmentKind.FOCUS]
         following = next((s for s in segments if s.start >= cur.end), None)
         then = f" · then {following.title.lower()}" if following else ""
         if cur.kind is SegmentKind.FOCUS:
-            n = next(i for i, s in enumerate(schedule.segments) if s.start == cur.start and s.kind is cur.kind)
-            number = 1 + sum(1 for s in schedule.segments[:n] if s.kind is SegmentKind.FOCUS)
-            self.overline.set_text("PAUSED" if paused else f"FOCUS {number} OF {len(focus_blocks)}")
+            number, total = pomodoro.focus_number(segments, cur)
+            self.overline.set_text("PAUSED" if paused else f"FOCUS {number} OF {total}")
         else:
             self.overline.set_text("PAUSED" if paused else cur.title.upper())
         self.timer.set_text(self._clock(cur.end - now))
