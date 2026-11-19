@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from . import alarms, planner, sound
 from .database import Database
 from .meta import APP_NAME
+from .models import Sound
 from .paths import DATABASE_PATH
 from .prayer_times import PrayerLibrary
 from .rhythm import DayKind
@@ -26,6 +27,8 @@ log = logging.getLogger("fuzzy-journey-alarms")
 def due_rings(db: Database, library: PrayerLibrary, now: datetime) -> list[alarms.Ring]:
     """Claim and return everything that should ring at ``now``."""
     rings = alarms.claim_due_reminders(db, now)
+    if db.settings.selftest_mode != "off" and planner.add_due_selftest(db, library, planner.build_view(db, library, now)):
+        rings.append(alarms.Ring("selftest", "Test myself", now, Sound(enabled=False)))
 
     slug = db.settings.location.slug
     today = now.date()

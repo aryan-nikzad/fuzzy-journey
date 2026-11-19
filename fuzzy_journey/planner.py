@@ -8,6 +8,7 @@ from .database import Database
 from .models import Task, TaskStatus
 from .prayer_times import PrayerLibrary
 from .rhythm import DayKind
+from .selftest import MODE_OFF, latest_due, times_for
 from .timeutil import now as clock_now
 from .today import TodayView, build_today
 
@@ -47,6 +48,18 @@ def build_view(
         pomodoro_sound=db.settings.pomodoro_sound,
         pomodoro_pauses=db.pomodoro_pauses(day),
     )
+
+
+def add_due_selftest(db: Database, library: PrayerLibrary, view: TodayView) -> bool:
+    """Add today's most recent due *Test myself* task, once. True when a new one was added."""
+    settings = db.settings
+    if settings.selftest_mode == MODE_OFF:
+        return False
+    prayers = library.day(settings.location.slug, view.day)
+    times = times_for(settings.selftest_mode, settings.selftest_hours, view.day,
+                      prayers.times if prayers else {}, view.wake, view.bedtime)
+    moment = latest_due(times, view.now)
+    return moment is not None and db.add_selftest_task(view.day, moment)
 
 
 def view_for_day(db: Database, library: PrayerLibrary, day: date) -> TodayView:

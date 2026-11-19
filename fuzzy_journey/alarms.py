@@ -147,7 +147,7 @@ def scheduled_events(
     """Every prayer and activity alarm that can fall on ``today``.
 
     Activities that started yesterday are considered too, because a block that
-    crosses midnight ends today. On a Rest day, work activities stay silent.
+    crosses midnight ends today. On a Rest or Offline day, work activities stay silent.
     """
     events: list[ScheduledEvent] = []
     activities = list(activities)
@@ -175,7 +175,7 @@ def scheduled_events(
             start_day = today + timedelta(days=offset)
             if not mask_includes(activity.days_mask, start_day):
                 continue
-            if activity.is_work and kinds.get(start_day, DayKind.STEADY) is DayKind.REST:
+            if activity.is_work and kinds.get(start_day, DayKind.STEADY).no_work:
                 continue
             start, base_end = span_after(start_day, activity.start_clock, activity.end_clock)
             if offset == 0 and activity.alarm_at_start:

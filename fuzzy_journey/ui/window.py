@@ -83,22 +83,39 @@ class MainWindow(Adw.ApplicationWindow):
         ("bank", "Bank", "x-office-calendar-symbolic"),
         ("alarms", "Alarms", "alarm-symbolic"),
         ("prayers", "Prayers", "weather-clear-night-symbolic"),
+        ("rules", "Rules", "checkbox-checked-symbolic"),
+        ("recovery", "Recovery", "document-revert-symbolic"),
+        ("recall", "Recall", "dialog-question-symbolic"),
+        ("habits", "Habits", "view-grid-symbolic"),
     )
 
     def _build_pages(self) -> None:
         from .pages.alarms import AlarmsPage
         from .pages.bank import BankPage
+        from .pages.habits import HabitsPage
         from .pages.prayers import PrayersPage
+        from .pages.recall import RecallPage
+        from .pages.recovery import RecoveryPage
         from .pages.routine import RoutinePage
+        from .pages.rules import RulesPage
         from .pages.today import TodayPage
         from .pages.tomorrow import TomorrowPage
 
         factories = {"today": TodayPage, "tomorrow": TomorrowPage, "routine": RoutinePage, "bank": BankPage,
-                     "alarms": AlarmsPage, "prayers": PrayersPage}
+                     "alarms": AlarmsPage, "prayers": PrayersPage, "rules": RulesPage, "recovery": RecoveryPage,
+                     "recall": RecallPage, "habits": HabitsPage}
         for name, title, icon in self.PAGES:
             page = factories[name](self.ctx)
             self.pages[name] = page
             self.stack.add_titled_with_icon(page, name, title, icon)
+        self._show_habits()
+
+    def _show_habits(self) -> None:
+        """The habit calendar is a page you can turn off; turning it off hides it and deletes nothing."""
+        on = self.ctx.settings.habit_calendar
+        self.stack.get_page(self.pages["habits"]).set_visible(on)
+        if not on and self.stack.get_visible_child() is self.pages["habits"]:
+            self.show_page("today")
 
     def page_index(self, index: int) -> None:
         if 0 <= index < len(self.PAGES):
@@ -122,6 +139,8 @@ class MainWindow(Adw.ApplicationWindow):
         for page in self.pages.values():
             if page.wants(scope):
                 page.refresh()
+        if scope in ("habits", "all"):
+            self._show_habits()
         if scope in ("alarms", "all"):
             self._check_service()
         if scope in ("tasks", "all"):
@@ -182,10 +201,43 @@ class MainWindow(Adw.ApplicationWindow):
         if prompt and n and self.ctx.settings.welcome_seen:
             GLib.idle_add(lambda: (self.review_tasks(), GLib.SOURCE_REMOVE)[1])
 
-    def review_tasks(self) -> None:
+    def review_tasks(self, through: date | None = None) -> None:
         from .dialogs.review_dialog import ReviewDialog
 
-        ReviewDialog(self, self.ctx, clock_now().date() - timedelta(days=1)).present()
+        ReviewDialog(self, self.ctx, through or clock_now().date() - timedelta(days=1)).present()
+
+    def settle_day(self, day: date) -> None:
+        """Open the settling window for a day, whenever the person wants it, not only at its time.
+
+        A past day opens the review of everything still without a status up to it. Today opens the
+        closing check-in; if today's focus time is not over yet it first says so, and asks."""
+        today = clock_now().date()
+        if day < today:
+            self.review_tasks(day)
+            return
+        if day > today:
+            self.ctx.toast("That day has not come yet. Plan it on the Tomorrow page.")
+            return
+        from .dialogs.closing_dialog import ClosingDialog
+
+        view = self.ctx.today_view()
+        early = view.closing_at is not None and view.now < view.closing_at
+        if not early:
+            ClosingDialog(self, self.ctx, view.day).present()
+            return
+        ask = Adw.MessageDialog(
+            transient_for=self, modal=True, heading="Settle today’s tasks now?",
+            body=f"Your focus time for today is not over yet; it ends around {view.closing_at:%H:%M}. "
+                 "You can settle now, but tasks you mark done or move on are decided early.",
+        )
+        ask.add_response("later", "Not yet")
+        ask.add_response("now", "Settle now")
+        ask.set_response_appearance("now", Adw.ResponseAppearance.SUGGESTED)
+        ask.set_default_response("later")
+        ask.set_close_response("later")
+        ask.connect("response", lambda _d, r: ClosingDialog(self, self.ctx, view.day, early=True).present()
+                    if r == "now" else None)
+        ask.present()
 
     def stop_alarm(self) -> None:
         sound.stop_all()
@@ -215,6 +267,8 @@ class MainWindow(Adw.ApplicationWindow):
         from .gi_setup import Gio
 
         menu = Gio.Menu()
+        menu.append("Settle today’s tasks…", "app.settle-today")
+        menu.append("Settle earlier days…", "app.settle-earlier")
         menu.append("Preferences", "app.preferences")
         menu.append("Philosophy", "app.philosophy")
         menu.append("About Fuzzy Journey", "app.about")

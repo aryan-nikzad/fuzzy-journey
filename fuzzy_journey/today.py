@@ -224,7 +224,7 @@ def build_today(
     if plan and plan.overtime:
         night = plan.overtime
         work.append(WorkItem("Night work", work_progress(night.start, night.duration, pauses, now, deadline)))
-    if kind is not DayKind.REST:
+    if not kind.no_work:
         for act in todays:
             if act.is_work:
                 start, end = span_after(day, act.start_clock, act.end_clock)
@@ -302,7 +302,9 @@ def build_today(
         add(p.start, p.end, Slot.WORK, "Planning",
             f"{_hm(p.start)}–{_hm(p.end)} · settle today, plan tomorrow", True)
 
-    if plan and kind is DayKind.REST:
+    if plan and kind is DayKind.OFFLINE:
+        add(plan.wake, plan.bedtime, Slot.FREE, "Offline day", "No work · computer off")
+    elif plan and kind is DayKind.REST:
         add(plan.wake, plan.bedtime, Slot.FREE, "Rest day", "No work today")
     elif plan and plan.free:
         # Free time begins when the morning work really finishes (an interruption may delay it).
@@ -353,7 +355,7 @@ def build_today(
 
     worked = focus_worked(schedule, pauses, now) if schedule else timedelta(0)
     closing_at = None
-    if kind is not DayKind.REST and work and any(w.progress.planned > timedelta(0) for w in work):
+    if not kind.no_work and work and any(w.progress.planned > timedelta(0) for w in work):
         closing_at = closing_moment(schedule, max(w.progress.end for w in work))
 
     return TodayView(

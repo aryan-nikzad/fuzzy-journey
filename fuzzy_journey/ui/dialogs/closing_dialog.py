@@ -4,7 +4,6 @@ from datetime import date, timedelta
 
 from ... import planner, tasks
 from ...models import TaskStatus
-from ...rhythm import DayKind
 from ...timeutil import now as clock_now
 from ..context import Context
 from ..focus import minutes_text
@@ -21,9 +20,11 @@ class ClosingDialog(Adw.Window):
     asks again in half an hour.
     """
 
-    def __init__(self, parent: Gtk.Window, ctx: Context, day: date) -> None:
+    def __init__(self, parent: Gtk.Window, ctx: Context, day: date, *, early: bool = False) -> None:
         super().__init__(transient_for=parent, modal=True, title="Close today’s work", default_width=500, default_height=640)
         self.ctx, self.day = ctx, day
+        #: Opened by hand before the day's work is over. Nothing here is asked again later by itself.
+        self.early = early
         self._resolved = False
         self._rows: list[Gtk.Widget] = []
 
@@ -99,17 +100,18 @@ class ClosingDialog(Adw.Window):
         self.group.set_visible(bool(pending))
         kind = self.ctx.db.day_kind(self.day)
         self.evening_group.set_visible(
-            bool(pending) and kind is not DayKind.REST and self.ctx.settings.evening_offer
+            bool(pending) and kind.allows_extra_work and self.ctx.settings.evening_offer
         )
         if pending:
             n = len(pending)
-            self.status.set_title("Your focus time for today is over")
+            self.status.set_title("Settling today early" if self.early else "Your focus time for today is over")
             self.status.set_subtitle(
                 f"{n} task{'s' if n != 1 else ''} still open ({minutes_text(total)}). "
-                "Say what happened to each, so tomorrow starts clean."
+                + ("Your focus time is not over yet. Say what happened to each now, or leave them for later."
+                   if self.early else "Say what happened to each, so tomorrow starts clean.")
             )
             self.close_button.set_label("Close the day")
-            self.later.set_visible(True)
+            self.later.set_visible(not self.early)
         else:
             self.status.set_title("Everything is settled")
             self.status.set_subtitle("Nothing left open for today.")
@@ -192,7 +194,7 @@ class ClosingDialog(Adw.Window):
             self._finish()
 
     def _on_close_request(self, _window) -> bool:
-        if not self._resolved:  # Escape or the window's own close: not "no", just "later"
+        if not self._resolved and not self.early:  # Escape or the window's own close: not "no", just "later"
             if planner.open_tasks(self.ctx.db, self.day):
                 self.ctx.db.snooze_closing(self.day, clock_now() + planner.snooze(self.ctx.db))
             else:

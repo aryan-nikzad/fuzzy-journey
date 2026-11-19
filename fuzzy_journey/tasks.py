@@ -27,6 +27,8 @@ PRAYERS = ("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
 
 def can_carry(task: Task) -> bool:
     """A prayer may wait one day, no more: the copy that was carried over cannot be carried again."""
+    if task.is_selftest:
+        return False  # a self-test belongs to its moment; it is never moved to another day
     return not (task.is_prayer and task.origin_id is not None)
 
 

@@ -50,7 +50,7 @@ class ReviewDialog(Adw.Window):
             return
         today = clock_now().date()
         for task in pending:
-            length = "" if task.is_prayer else f" · {minutes_text(task.minutes)}"
+            length = "" if task.is_routine else f" · {minutes_text(task.minutes)}"
             row = Adw.ActionRow(title=GLib.markup_escape_text(task.title), subtitle=f"{task.day:%A %-d %B}{length}")
             buttons = Gtk.Box(valign=Gtk.Align.CENTER)
             buttons.add_css_class("linked")

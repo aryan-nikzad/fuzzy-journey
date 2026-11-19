@@ -70,9 +70,339 @@ class UiSmokeTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_every_page_renders_and_refreshes(self):
-        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers"])
-        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro"):
+        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers", "rules", "recovery", "recall", "habits"])
+        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "principles", "habits"):
             self.ctx.changed(scope)
+
+    # -- rules and recovery ------------------------------------------------
+
+    @staticmethod
+    def _texts(widget) -> list[str]:
+        found = []
+
+        def walk(w):
+            child = w.get_first_child()
+            while child:
+                if child.__class__.__name__ == "Label":
+                    found.append(child.get_label())
+                walk(child)
+                child = child.get_next_sibling()
+
+        walk(widget)
+        return found
+
+    def test_the_rules_page_shows_the_written_rules_and_follows_edits(self):
+        from fuzzy_journey.principles import SECTION_RULES, Principle
+        from fuzzy_journey.ui.dialogs.principle_dialog import PrincipleDialog
+
+        page = self.window.pages["rules"]
+        shown = self._texts(page.cards)
+        self.assertIn("Computer-use boundary", shown)
+        self.assertIn("The PC is for work only.", shown)
+        self.assertIn("Disruption Mode", shown)
+        before = len(self.ctx.db.list_principles(SECTION_RULES))
+
+        dialog = PrincipleDialog(self.window, self.ctx, SECTION_RULES)
+        dialog.title_row.set_text("Phone off at night")
+        dialog.text.get_buffer().set_text("Off by 23:00.\nCharges outside the bedroom.")
+        self.assertTrue(dialog.save())
+        dialog.destroy()
+        self.assertIn("Phone off at night", self._texts(page.cards))
+        self.assertIn("Charges outside the bedroom.", self._texts(page.cards))
+
+        item = self.ctx.db.list_principles(SECTION_RULES)[-1]
+        edit = PrincipleDialog(self.window, self.ctx, SECTION_RULES, item)
+        edit.title_row.set_text("")
+        self.assertFalse(edit.save())  # a rule needs a title
+        edit.destroy()
+        self.ctx.db.delete_principle(item.id)
+        self.ctx.changed("principles")
+        self.assertEqual(len(self.ctx.db.list_principles(SECTION_RULES)), before)
+        self.assertNotIn("Phone off at night", self._texts(page.cards))
+        self.assertIsInstance(item, Principle)
+
+    def test_the_recovery_page_lists_the_steps_in_order_and_can_test_memory(self):
+        page = self.window.pages["recovery"]
+        steps = self.ctx.db.list_principles("recovery")
+        self.assertEqual(self._texts(page.list).count(steps[0].title), 1)
+        self.assertIn("Check reality", self._texts(page.list))
+
+        page.test.set_active(True)  # Test myself: titles and details are hidden
+        hidden = self._texts(page.list)
+        self.assertNotIn("Check reality", hidden)
+        self.assertIn("Step 2", hidden)
+        page._reveal(steps[1])
+        self.assertIn("Check reality", self._texts(page.list))
+        self.assertNotIn(steps[0].title, self._texts(page.list))
+
+        page.test.set_active(False)  # leaving the mode shows everything again
+        self.assertIn(steps[0].title, self._texts(page.list))
+
+    def test_moving_a_recovery_step_reorders_the_page(self):
+        page = self.window.pages["recovery"]
+        steps = self.ctx.db.list_principles("recovery")
+        self.ctx.db.move_principle(steps[0], 1)
+        self.ctx.changed("principles")
+        texts = [t for t in self._texts(page.list) if t in (steps[0].title, steps[1].title)]
+        self.assertEqual(texts, [steps[1].title, steps[0].title])
+        self.ctx.db.move_principle(steps[0], -1)
+        self.ctx.changed("principles")
+
+    # -- recall, disruption days, prayers and settling -----------------------
+
+    def test_the_recall_page_hides_everything_until_tapped(self):
+        page = self.window.pages["recall"]
+        names = [r.item.cue for r in page._rows]
+        self.assertIn("Rule 1", names)
+        self.assertIn("Step 1", names)
+        self.assertIn("Fajr", names)  # prayers are shown while they are switched on
+        self.assertTrue(all(not r.revealed for r in page._rows))
+        self.assertNotIn("Computer-use boundary", self._texts(page.groups))
+
+        rule = next(r for r in page._rows if r.item.cue == "Rule 1")
+        rule.emit("activated")
+        self.assertIn("Computer-use boundary", self._texts(page.groups))
+        self.assertIn("The PC is for work only.", rule.get_subtitle())
+        page._hide_all(None)
+        self.assertNotIn("Computer-use boundary", self._texts(page.groups))
+
+    def test_recall_keeps_what_was_revealed_when_data_changes(self):
+        page = self.window.pages["recall"]
+        next(r for r in page._rows if r.item.cue == "Step 2").emit("activated")
+        self.ctx.changed("tasks")
+        again = next(r for r in page._rows if r.item.cue == "Step 2")
+        self.assertTrue(again.revealed)
+        page._hide_all(None)
+
+    def test_recall_follows_the_prayers_setting_and_todays_tasks(self):
+        from fuzzy_journey.models import Task
+
+        page = self.window.pages["recall"]
+        today = self.ctx.today_view().day
+        task_id = self.ctx.db.save_task(Task("Write the report", 60, today))
+        self.ctx.changed("tasks")
+        self.assertIn("Write the report", [r.item.title for r in page._rows])
+        self.ctx.db.delete_task(task_id)
+        self.ctx.settings.show_prayers = False
+        self.ctx.changed("tasks")
+        self.assertNotIn("Fajr", [r.item.cue for r in page._rows])
+        self.assertNotIn("Prayers", self._texts(self.window.pages["today"].tasks.list))
+        self.ctx.settings.show_prayers = True
+        self.ctx.changed("tasks")
+        self.assertIn("Fajr", [r.item.cue for r in page._rows])
+
+    def test_a_disruption_day_can_be_started_changed_and_undone_from_today(self):
+        from fuzzy_journey.rhythm import DayKind
+        from fuzzy_journey.ui.dialogs.disruption_dialog import DisruptionDialog
+
+        page = self.window.pages["today"]
+        day = self.ctx.today_view().day
+        self.assertTrue(page.disrupt.get_visible())
+        self.assertFalse(page.disruption.get_visible())
+
+        dialog = DisruptionDialog(self.window, self.ctx, day)
+        self.assertTrue(dialog.save())
+        dialog.destroy()
+        self.assertEqual(self.ctx.db.day_kind(day), DayKind.DISRUPTION)
+        self.assertTrue(page.disruption.get_visible())
+        self.assertFalse(page.selector.get_visible())
+        self.assertFalse(page.night_button.get_visible())
+        self.assertFalse(page.disrupt.get_visible())
+        self.assertIn("25%", page.disruption.get_title())
+
+        dialog = DisruptionDialog(self.window, self.ctx, day, DayKind.DISRUPTION)
+        dialog.offline.set_active(True)
+        self.assertTrue(dialog.save())
+        dialog.destroy()
+        self.assertEqual(self.ctx.db.day_kind(day), DayKind.OFFLINE)
+        self.assertEqual(page.hero.get_text(), "Offline day")
+
+        page._on_undo(None)
+        self.assertEqual(self.ctx.db.day_kind(day), DayKind.STEADY)
+        self.assertFalse(page.disruption.get_visible())
+        self.assertTrue(page.selector.get_visible())
+
+    def test_settling_is_always_reachable_and_warns_when_it_is_early(self):
+        from datetime import timedelta
+
+        page = self.window.pages["today"]
+        footer = page.tasks
+        self.assertTrue(footer.settle_day.get_visible())
+        self.assertEqual(footer.settle_day.get_label(), "Settle today…")
+        self.assertTrue(footer.settle_earlier.get_visible() and footer.plan_next.get_visible())
+
+        view = self.ctx.today_view()  # 10:15: the morning's work is not over, so settling now is early
+        self.assertGreater(view.closing_at, view.now)
+        dialogs = Gtk.Window.list_toplevels()
+        before = len(dialogs)
+        self.window.settle_day(view.day)  # asks before opening anything
+        asked = [w for w in Gtk.Window.list_toplevels()
+                 if isinstance(w, Adw.MessageDialog) and "not over yet" in (w.get_body() or "")]
+        self.assertTrue(asked, "an early settle must ask first")
+        for w in Gtk.Window.list_toplevels()[before:]:
+            w.destroy()
+
+        self.window.settle_day(view.day - timedelta(days=1))  # a past day: the review (or "all settled")
+        self.window.settle_day(view.day + timedelta(days=1))  # a future day only explains
+
+        tomorrow = self.window.pages["tomorrow"]
+        tomorrow.tasks.show_day(view.day + timedelta(days=1), 60)
+        self.assertFalse(tomorrow.tasks.settle_day.get_visible())  # nothing to settle on a future day
+        tomorrow.tasks.show_day(view.day - timedelta(days=1), 60)
+        self.assertEqual(tomorrow.tasks.settle_day.get_label(), "Settle this day…")
+
+    def test_an_early_closing_dialog_does_not_snooze_itself_when_dismissed(self):
+        from fuzzy_journey.models import Task
+        from fuzzy_journey.ui.dialogs.closing_dialog import ClosingDialog
+
+        day = self.ctx.today_view().day
+        task_id = self.ctx.db.save_task(Task("Still open", 30, day))
+        dialog = ClosingDialog(self.window, self.ctx, day, early=True)
+        self.assertFalse(dialog.later.get_visible())
+        self.assertIn("not over yet", dialog.status.get_subtitle())
+        dialog._on_close_request(dialog)
+        self.assertIsNone(self.ctx.db.closing_state(day)[1])  # no "ask me again" was set
+        dialog.destroy()
+        self.ctx.db.delete_task(task_id)
+
+    def test_self_test_tasks_appear_in_the_task_list_and_lead_to_recall(self):
+        page = self.window.pages["today"]
+        self.assertNotIn("Test myself", self._texts(page.tasks.list))
+        self.ctx.settings.selftest_mode = "prayers"
+        self.ctx.changed("tasks")  # 10:15: Fajr has passed, so one test is due
+        self.assertIn("Test myself", self._texts(page.tasks.list))
+        self.assertTrue(any(t.startswith("Test myself ·") for t in self._texts(page.tasks.list)))
+        self.ctx.settings.selftest_mode = "off"
+        self.ctx.changed("tasks")
+        self.assertNotIn("Test myself", self._texts(page.tasks.list))
+        with self.ctx.db.transaction() as conn:
+            conn.execute("DELETE FROM tasks WHERE kind='selftest'")
+
+
+    def test_the_habit_calendar_records_each_habit_on_its_own(self):
+        from datetime import date
+
+        page = self.window.pages["habits"]
+        today = date(2026, 11, 2)
+        self.assertEqual(page.selected, today)
+        self.assertFalse(any(s.get_sensitive() for s in page.spins.values()))  # nothing happened yet
+
+        page.checks["masturbation"].set_active(True)  # one habit only
+        self.assertEqual(self.ctx.db.habit_counts(today, today)[today], {"masturbation": 1, "porn": 0})
+        page.spins["masturbation"].set_value(3)
+        page.checks["porn"].set_active(True)
+        self.assertEqual(self.ctx.db.habit_counts(today, today)[today], {"masturbation": 3, "porn": 1})
+        self.assertTrue(page.spins["masturbation"].get_sensitive())
+
+        page.checks["masturbation"].set_active(False)
+        self.assertEqual(self.ctx.db.habit_counts(today, today)[today], {"masturbation": 0, "porn": 1})
+        page.checks["porn"].set_active(False)
+        self.assertEqual(self.ctx.db.habit_counts(today, today), {})
+
+    def test_habit_figures_wait_for_the_days_to_pass_and_a_new_start_date_keeps_marks(self):
+        from datetime import date, timedelta
+
+        page = self.window.pages["habits"]
+        today = date(2026, 11, 2)
+        for key in ("masturbation", "porn"):
+            self.ctx.settings.set_habit_start(key, today - timedelta(days=3))
+        self.ctx.changed("habits")
+        self.assertIn("4 more days", page.groups["porn"]["week"].get_subtitle())
+        self.assertIn("27 more days", page.groups["porn"]["month"].get_subtitle())
+
+        self.ctx.db.set_habit_day(today - timedelta(days=2), {"porn": 2})
+        self.ctx.settings.set_habit_start("porn", today - timedelta(days=10))
+        self.ctx.changed("habits")
+        self.assertIn("2 time", page.groups["porn"]["week"].get_subtitle())
+        self.assertIn("4 more days", page.groups["masturbation"]["week"].get_subtitle())  # its own start
+        self.ctx.settings.set_habit_start("porn", today - timedelta(days=1))  # moving later wipes nothing
+        self.assertEqual(self.ctx.db.habit_counts(today - timedelta(days=2), today)[today - timedelta(days=2)]["porn"], 2)
+        self.ctx.db.set_habit_day(today - timedelta(days=2), {})
+
+    def test_the_habit_page_can_be_hidden_and_shown_again(self):
+        stack_page = self.window.stack.get_page(self.window.pages["habits"])
+        self.assertTrue(stack_page.get_visible())
+        self.window.show_page("habits")
+        self.ctx.settings.habit_calendar = False
+        self.ctx.changed("habits")
+        self.assertFalse(stack_page.get_visible())
+        self.assertEqual(self.window.stack.get_visible_child_name(), "today")  # it does not strand you there
+        self.ctx.settings.habit_calendar = True
+        self.ctx.changed("habits")
+        self.assertTrue(stack_page.get_visible())
+
+
+    def test_closing_hides_into_the_tray_only_while_a_tray_really_exists(self):
+        from types import SimpleNamespace
+
+        app, window = self.app, self.window
+        app.window = window
+        self.addCleanup(setattr, app, "tray", None)
+        self.addCleanup(setattr, app, "window", None)
+        window.present()
+        app.tray = SimpleNamespace(active=False)  # a desktop with no tray must never trap the window
+        self.assertFalse(app._on_window_close(window))
+        self.assertTrue(window.is_visible())
+        app.tray = SimpleNamespace(active=True)
+        self.assertTrue(app._on_window_close(window))  # handled: hidden, not destroyed
+        self.assertFalse(window.is_visible())
+        app.toggle_window()  # the tray icon was clicked
+        self.assertTrue(window.is_visible())
+        app.tray = None
+        self.assertFalse(app._on_window_close(window))
+
+    def test_the_tray_follows_its_setting(self):
+        app = self.app
+        self.assertIsNone(app.tray)
+        self.ctx.settings.tray_icon = False
+        app.apply_tray()
+        self.assertIsNone(app.tray)
+        self.assertFalse(self.ctx.settings.tray_icon)
+
+
+    def _prefs(self):
+        from fuzzy_journey.ui.dialogs.preferences import PreferencesWindow
+
+        known = set(Gtk.Window.list_toplevels())
+        prefs = PreferencesWindow(self.window, self.ctx)
+
+        def cleanup() -> None:  # also close any message the window opened
+            for w in Gtk.Window.list_toplevels():
+                if w not in known:
+                    w.destroy()
+
+        self.addCleanup(cleanup)
+        return prefs
+
+    def test_preferences_can_back_up_and_restore_everything(self):
+        from fuzzy_journey import backup as backup_module
+
+        prefs = self._prefs()
+        folder = Path(tempfile.mkdtemp())
+        self.ctx.settings.selftest_hours = 6
+        self.assertTrue(prefs.make_backup(folder / "mine"))  # no extension: ".zip" is added
+        archive = folder / "mine.zip"
+        self.assertTrue(archive.is_file())
+        self.assertEqual(backup_module.read_backup_info(archive).schema, backup_module.SCHEMA_VERSION)
+
+        self.ctx.settings.selftest_hours = 2  # changed after the backup
+        original = backup_module.restore_backup  # keep the safety copy and sounds out of the real data folder
+        backup_module.restore_backup = lambda db, src: original(
+            db, src, sound_dir=folder / "sounds", safety_dir=folder / "safe")
+        try:
+            self.assertTrue(prefs.restore_backup(archive))
+        finally:
+            backup_module.restore_backup = original
+        self.assertEqual(self.ctx.settings.selftest_hours, 6)  # back to what it was when saved
+        self.assertTrue(list((folder / "safe").glob("before-restore-*.sqlite3")))
+
+    def test_preferences_refuse_a_file_that_is_not_a_backup_and_change_nothing(self):
+        prefs = self._prefs()
+        junk = Path(tempfile.mkdtemp()) / "x.zip"
+        junk.write_text("not a zip")
+        before = self.ctx.settings.selftest_hours
+        self.assertFalse(prefs.restore_backup(junk))
+        self.assertEqual(self.ctx.settings.selftest_hours, before)
 
     def test_today_shows_the_bundled_day(self):
         page = self.window.pages["today"]

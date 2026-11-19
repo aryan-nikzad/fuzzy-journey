@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from ... import planner
 from ...rhythm import DayKind, WorkStatus
 from ...timeutil import countdown, human_duration
 from ...timeutil import now as clock_now
@@ -93,7 +94,9 @@ class TodayPage(Page):
         self.night_button.connect("clicked", lambda _b: self._night(0))
         self.evening_button = Gtk.Button(label="Add evening work…", tooltip_text="Not recommended")
         self.evening_button.connect("clicked", lambda _b: self._evening(0))
-        for b in (self.overslept, self.evening_button, self.night_button):
+        self.disrupt = Gtk.Button(label="A hard day…", tooltip_text="Ill, grieving, or too weak to work a normal day")
+        self.disrupt.connect("clicked", lambda _b: self._disrupt(None))
+        for b in (self.overslept, self.disrupt, self.evening_button, self.night_button):
             b.add_css_class("flat")
             b.add_css_class("caption")
             self.extras.append(b)
@@ -107,6 +110,16 @@ class TodayPage(Page):
         self.recovered.add_suffix(change)
         self.recovered.add_suffix(undo)
         kind_box.append(self.recovered)
+        self.disruption = Adw.ActionRow(title="Disruption day", activatable=False, subtitle_lines=0)
+        self.disruption.add_css_class("card")
+        disruption_change = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
+        disruption_back = Gtk.Button(label="Back to normal", valign=Gtk.Align.CENTER,
+                                     tooltip_text="Return to a Steady day")
+        disruption_change.connect("clicked", lambda _b: self._disrupt(self._kind))
+        disruption_back.connect("clicked", self._on_undo)
+        self.disruption.add_suffix(disruption_change)
+        self.disruption.add_suffix(disruption_back)
+        kind_box.append(self.disruption)
         self.night_row = Adw.ActionRow(title="Night work", activatable=False)
         self.night_row.add_css_class("card")
         night_change = Gtk.Button(label="Change", valign=Gtk.Align.CENTER)
@@ -126,6 +139,7 @@ class TodayPage(Page):
         self.evening_row.add_suffix(evening_remove)
         kind_box.append(self.evening_row)
         self._start = None
+        self._kind = DayKind.STEADY
         self._overtime = 0
         self._evening_minutes = 0
         self.day_box.append(kind_box)
@@ -159,6 +173,11 @@ class TodayPage(Page):
         from ..dialogs.recovered_dialog import RecoveredDialog
 
         RecoveredDialog(self.get_root(), self.ctx, clock_now().date(), current).present()
+
+    def _disrupt(self, current) -> None:
+        from ..dialogs.disruption_dialog import DisruptionDialog
+
+        DisruptionDialog(self.get_root(), self.ctx, clock_now().date(), current).present()
 
     def _night(self, current: int) -> None:
         from ..dialogs.overtime_dialog import OvertimeDialog
@@ -212,6 +231,7 @@ class TodayPage(Page):
         self._render_hero(view)
         self.card.update(view)
         self._render_shape(view)
+        planner.add_due_selftest(self.ctx.db, self.ctx.library, view)
         self.tasks.show_day(view.day, view.schedule.focus_minutes if view.schedule else 0)
         self._render_timeline(view)
 
@@ -223,21 +243,23 @@ class TodayPage(Page):
         self.bank_button.set_tooltip_text("Rest banked from Push days. Open the bank.")
         self.selector.set_kind(view.kind)
         recovered = view.kind is DayKind.RECOVERED
+        disrupted = view.kind.is_disruption
+        self._kind = view.kind
         entry = self.ctx.db.day_entries(view.day, view.day).get(view.day)
         self._start = entry.start if entry else None
-        self.selector.set_visible(not recovered)
+        self.selector.set_visible(not recovered and not disrupted)
         self.recovered.set_visible(recovered and view.plan is not None)
+        self.disruption.set_visible(disrupted)
+        self.disrupt.set_visible(view.plan is not None and not disrupted)
         self.overslept.set_visible(view.kind is DayKind.STEADY and view.plan is not None)
         self._overtime = entry.overtime if entry else 0
         night = view.plan.overtime if view.plan else None
-        self.night_button.set_visible(view.plan is not None and view.kind is not DayKind.REST and not night)
+        extra = view.plan is not None and view.kind.allows_extra_work
+        self.night_button.set_visible(extra and not night)
         self.night_row.set_visible(night is not None)
         self._evening_minutes = entry.evening if entry else 0
-        self.evening_button.set_visible(
-            view.plan is not None and view.kind is not DayKind.REST and not self._evening_minutes
-            and self.ctx.settings.evening_offer
-        )
-        self.evening_row.set_visible(view.plan is not None and view.kind is not DayKind.REST and bool(self._evening_minutes))
+        self.evening_button.set_visible(extra and not self._evening_minutes and self.ctx.settings.evening_offer)
+        self.evening_row.set_visible(extra and bool(self._evening_minutes))
         if self._evening_minutes and view.plan and view.plan.evening:
             block = view.plan.evening
             lost = f" · {human_duration(view.sleep_lost)} of sleep given up" if view.sleep_lost.total_seconds() > 0 else ""
@@ -246,19 +268,32 @@ class TodayPage(Page):
                 f"· not recommended · bed {view.bedtime:%H:%M}{lost}"
             )
         self.extras.set_visible(
-            self.overslept.get_visible() or self.evening_button.get_visible() or self.night_button.get_visible()
+            self.overslept.get_visible() or self.disrupt.get_visible()
+            or self.evening_button.get_visible() or self.night_button.get_visible()
         )
         if night:
             lost = f" · {human_duration(view.sleep_lost)} of sleep given up" if view.sleep_lost.total_seconds() > 0 else ""
             self.night_row.set_subtitle(
                 f"{night.start:%H:%M}–{night.end:%H:%M} · not recommended · bed {view.bedtime:%H:%M}{lost}"
             )
+        if disrupted:
+            self.disruption.set_title("Offline day" if view.kind is DayKind.OFFLINE else "Disruption day · 25% of the work")
+            self.disruption.set_subtitle(
+                "Computer off. Rest, sleep, or stay awake without it. Prayers and routine stay on the timeline: "
+                "do them, or stay home." if view.kind is DayKind.OFFLINE else
+                "The other three quarters of the day stay empty. Prayers, exercise, reading and the rest of "
+                "your routine carry on."
+            )
         if recovered and view.plan:
             self.recovered.set_subtitle(f"Started {view.plan.wake:%H:%M} · half of the time you are awake")
 
     def _render_hero(self, view: TodayView) -> None:
         focus = view.focus
-        if view.kind is DayKind.REST:
+        if view.kind is DayKind.OFFLINE:
+            self.overline.set_text("TODAY")
+            self.hero.set_text("Offline day")
+            self.hero_sub.set_text("No work. The computer stays off. Rest, sleep, or stay awake without it.")
+        elif view.kind is DayKind.REST:
             self.overline.set_text("TODAY")
             self.hero.set_text("Rest day")
             self.hero_sub.set_text("No work today. One day is spent from the bank.")
@@ -315,7 +350,7 @@ class TodayPage(Page):
         if not view.plan:
             self.summary.set_text("")
             return
-        if view.kind is DayKind.REST:
+        if view.kind.no_work:
             self.summary.set_text(f"No work · bed {view.bedtime:%H:%M} · {human_duration(view.sleep)} of sleep")
             return
         parts = [f"{human_duration(view.plan.target)} of work", f"bed {view.bedtime:%H:%M}",

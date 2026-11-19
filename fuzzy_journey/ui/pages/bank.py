@@ -181,6 +181,11 @@ class BankPage(Page):
             self.day_note_hint.set_text(
                 f"A recovered day: it began at {entry.start:%H:%M}. It counts as Steady. Choosing a kind replaces it."
             )
+        elif entry and entry.kind.is_disruption:
+            what = "an offline day" if entry.kind is DayKind.OFFLINE else "a 25% day"
+            self.day_note_hint.set_text(
+                f"A disruption day ({what}). It is neutral for the bank. Choosing a kind replaces it."
+            )
         else:
             self.day_note_hint.set_text("Unmarked days count as Steady. You can change past days too.")
         self._render_month()
@@ -229,6 +234,8 @@ class BankPage(Page):
                         button.add_css_class("fj-day-rest")
                     elif entry.kind is DayKind.RECOVERED:
                         button.add_css_class("fj-day-recovered")
+                    elif entry.kind.is_disruption:
+                        button.add_css_class("fj-day-disruption")
                 if day == today:
                     button.add_css_class("fj-day-today")
                 if day == self.selected:

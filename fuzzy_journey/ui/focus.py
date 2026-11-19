@@ -63,6 +63,30 @@ class TaskList(Gtk.Box):
         self.add_row = Adw.ActionRow(title="Add a task", activatable=True)
         self.add_row.add_prefix(Gtk.Image.new_from_icon_name("list-add-symbolic"))
 
+        # Always within reach: settling a day is never locked until "its time".
+        self.footer = Gtk.Box(halign=Gtk.Align.CENTER, spacing=6)
+        self.settle_day = Gtk.Button(label="Settle today…")
+        self.settle_earlier = Gtk.Button(label="Settle earlier days…")
+        self.plan_next = Gtk.Button(label="Plan tomorrow")
+        self.settle_day.connect("clicked", lambda _b: self._root().settle_day(self.day))
+        self.settle_earlier.connect("clicked", lambda _b: self._root().review_tasks())
+        self.plan_next.connect("clicked", lambda _b: ctx.show_page("tomorrow"))
+        for button in (self.settle_day, self.settle_earlier, self.plan_next):
+            button.add_css_class("flat")
+            button.add_css_class("caption")
+            self.footer.append(button)
+        self.append(self.footer)
+
+    def _root(self):
+        return self.get_root()
+
+    def _render_footer(self) -> None:
+        today = clock_now().date()
+        self.settle_day.set_visible(self.day <= today)
+        self.settle_day.set_label("Settle today…" if self.day == today else "Settle this day…")
+        self.settle_earlier.set_visible(self.day == today)
+        self.plan_next.set_visible(self.day == today)
+
     # -- rendering ---------------------------------------------------------
 
     def show_day(self, day: date, focus_minutes: int) -> None:
@@ -71,9 +95,11 @@ class TaskList(Gtk.Box):
         today = clock_now().date()
         if today <= day <= today + timedelta(days=14):  # the prayers are there when the day is
             self.ctx.db.ensure_prayer_tasks(day)
+        self._render_footer()
         everything = self.ctx.db.tasks_on(day)
         prayers = sorted((t for t in everything if t.is_prayer), key=lambda t: (t.origin_id is None, t.position, t.id))
-        items = tasks.in_order([t for t in everything if not t.is_prayer], mode)
+        selftests = [t for t in everything if t.is_selftest]
+        items = tasks.in_order([t for t in everything if not t.is_routine], mode)
         signature = (day, focus_minutes, mode, self.ctx.location.slug,
                      tuple((t.id, t.title, t.minutes, t.level, t.status, t.position) for t in everything))
         if signature == self._signature:
@@ -98,6 +124,8 @@ class TaskList(Gtk.Box):
         clear(self.list)
         if prayers:
             self.list.append(self._prayers(prayers, mode))
+        if selftests:
+            self.list.append(self._selftests(selftests))
         open_tasks = [t for t in items if t.status is TaskStatus.UNSET]
         for task in items:
             self.list.append(self._row(task, open_tasks, mode))
@@ -109,6 +137,27 @@ class TaskList(Gtk.Box):
             else "This day’s focus time is full."
         )
         self.list.append(self.add_row)
+
+    def _selftests(self, selftests: list[Task]) -> Adw.ExpanderRow:
+        """The *Test myself* tasks: say your plan from memory, then tick it. Never focus time."""
+        done = sum(1 for t in selftests if t.status is TaskStatus.DONE)
+        group = Adw.ExpanderRow(title="Test myself", subtitle=f"{done} of {len(selftests)} done")
+        group.set_expanded(any(t.status is TaskStatus.UNSET for t in selftests))
+        for task in selftests:
+            row = Adw.ActionRow(title=GLib.markup_escape_text(task.title), activatable=False)
+            check = Gtk.CheckButton(valign=Gtk.Align.CENTER, active=task.status is TaskStatus.DONE)
+            check.set_tooltip_text("Done")
+            check.connect("toggled", lambda b, t=task: self._set(
+                t, TaskStatus.DONE if b.get_active() else TaskStatus.UNSET))
+            row.add_prefix(check)
+            open_recall = Gtk.Button(label="Open Recall", valign=Gtk.Align.CENTER)
+            open_recall.add_css_class("flat")
+            open_recall.connect("clicked", lambda _b: self.ctx.show_page("recall"))
+            row.add_suffix(open_recall)
+            if task.status is not TaskStatus.UNSET:
+                row.add_css_class("fj-settled")
+            group.add_row(row)
+        return group
 
     def _prayers(self, prayers: list[Task], mode: str) -> Adw.ExpanderRow:
         """The five prayers: zero-length tasks, folded into one row so they do not crowd the list."""

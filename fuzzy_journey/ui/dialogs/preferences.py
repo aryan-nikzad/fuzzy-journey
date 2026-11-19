@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime
+from pathlib import Path
 
+from ... import backup
 from ...meta import APP_NAME
 from ...models import CALCULATION_METHODS, PROGRESS_UNITS, Location
 from ...paths import APP_DATA_DIR, ensure_data_dir
 from ...pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE
+from ...selftest import HOURS_RANGE
+from ...selftest import MODES as SELFTEST_MODES
 from ...tasks import ORDER_MODES
 from ..context import Context
-from ..gi_setup import Adw, Gio, Gtk
-from ..widgets import SoundEditor
+from ..gi_setup import Adw, Gio, GLib, Gtk
+from ..widgets import SoundEditor, confirm
 
 THEMES = ("system", "light", "dark")
 
@@ -168,7 +172,75 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.order_row.set_selected(ORDER_MODES.index(ctx.settings.task_order))
         self.order_row.connect("notify::selected", self._on_order)
         plan.add(self.order_row)
+        self.prayers_row = Adw.SwitchRow(
+            title="Show the five prayers as tasks",
+            subtitle="Turn off if you do not pray. The prayer times still set when your day starts and ends.",
+        )
+        self.prayers_row.set_active(ctx.settings.show_prayers)
+        self.prayers_row.connect("notify::active", self._on_show_prayers)
+        plan.add(self.prayers_row)
         page.add(plan)
+
+        test = Adw.PreferencesGroup(
+            title="Test myself",
+            description="Add a regular task that asks you to say your rules, your plan and your day from memory. "
+                        "It is only a record for you: never focus time, never carried over, never nagged about.",
+        )
+        self.selftest_row = Adw.ComboRow(title="Add a self-test task")
+        self.selftest_row.set_model(Gtk.StringList.new(["Never", "At each prayer time", "Every few hours"]))
+        self.selftest_row.set_selected(SELFTEST_MODES.index(ctx.settings.selftest_mode))
+        self.selftest_row.connect("notify::selected", self._on_selftest)
+        test.add(self.selftest_row)
+        self.selftest_hours = Adw.SpinRow.new_with_range(*HOURS_RANGE, 1)
+        self.selftest_hours.set_title("Hours between tests")
+        self.selftest_hours.set_subtitle("From when you wake until bedtime.")
+        self.selftest_hours.set_value(ctx.settings.selftest_hours)
+        self.selftest_hours.connect("notify::value", self._on_selftest)
+        test.add(self.selftest_hours)
+        self.selftest_hours.set_visible(ctx.settings.selftest_mode == "interval")
+        page.add(test)
+
+        privacy = Adw.PreferencesGroup(title="Habit calendar")
+        self.habit_row = Adw.SwitchRow(
+            title="Show the habit calendar",
+            subtitle="A private page for counting two habits day by day. Turning it off hides the page and keeps your data.",
+        )
+        self.habit_row.set_active(ctx.settings.habit_calendar)
+        self.habit_row.connect("notify::active", self._on_habit_calendar)
+        privacy.add(self.habit_row)
+        page.add(privacy)
+
+        safe = Adw.PreferencesGroup(
+            title="Backup and restore",
+            description="Everything you have set up in one file: settings, reminders, routine, tasks, days, "
+                        "habits, rules, the recovery plan and your own sounds. The prayer-time CSV files are not "
+                        "included; they work on their own wherever you place them.",
+        )
+        back_up = Adw.ActionRow(title="Back up everything…", subtitle="Save it to a file you keep safe.",
+                                activatable=True)
+        back_up.add_suffix(Gtk.Image.new_from_icon_name("document-save-symbolic"))
+        back_up.connect("activated", self._choose_backup_file)
+        restore = Adw.ActionRow(
+            title="Restore from a backup…",
+            subtitle="Replaces everything the app stores now. A copy of what you have is kept first.",
+            activatable=True,
+        )
+        restore.add_suffix(Gtk.Image.new_from_icon_name("document-open-symbolic"))
+        restore.connect("activated", self._choose_restore_file)
+        safe.add(back_up)
+        safe.add(restore)
+        page.add(safe)
+
+        tray = Adw.PreferencesGroup(title="System tray")
+        self.tray_row = Adw.SwitchRow(
+            title="Show an icon in the system tray",
+            subtitle="Click it to show or hide the window. Closing the window then keeps the app in the tray. "
+                     "GNOME needs the AppIndicator extension. With no tray found, the window closes normally.",
+        )
+        self.tray_row.set_active(ctx.settings.tray_icon)
+        self.tray_row.connect("notify::active", self._on_tray)
+        tray.add(self.tray_row)
+        page.add(tray)
 
         closing = Adw.PreferencesGroup(
             title="Closing the day",
@@ -253,6 +325,113 @@ class PreferencesWindow(Adw.PreferencesWindow):
             return
         self.ctx.settings.progress_units = chosen
         self.ctx.changed("progress")
+
+    # -- backup and restore ----------------------------------------------------------
+
+    def _zip_filters(self) -> Gio.ListStore:
+        zips = Gtk.FileFilter(name="Fuzzy Journey backups (.zip)")
+        zips.add_suffix("zip")
+        filters = Gio.ListStore.new(Gtk.FileFilter)
+        filters.append(zips)
+        return filters
+
+    def _choose_backup_file(self, *_args) -> None:
+        dialog = Gtk.FileDialog(title="Save a backup", initial_name=backup.default_filename())
+        dialog.set_filters(self._zip_filters())
+
+        def done(source, result) -> None:
+            try:
+                picked = source.save_finish(result)
+            except GLib.Error:
+                return  # cancelled
+            self.make_backup(Path(picked.get_path()))
+
+        dialog.save(self, None, done)
+
+    def _choose_restore_file(self, *_args) -> None:
+        dialog = Gtk.FileDialog(title="Choose a backup to restore")
+        dialog.set_filters(self._zip_filters())
+
+        def done(source, result) -> None:
+            try:
+                picked = source.open_finish(result)
+            except GLib.Error:
+                return
+            self.ask_restore(Path(picked.get_path()))
+
+        dialog.open(self, None, done)
+
+    def _tell(self, heading: str, body: str) -> None:
+        message = Adw.MessageDialog(transient_for=self, heading=heading, body=body)
+        message.add_response("ok", "OK")
+        message.present()
+
+    def make_backup(self, path: Path) -> bool:
+        if path.suffix.lower() != ".zip":
+            path = path.with_name(path.name + ".zip")
+        try:
+            info = backup.create_backup(self.ctx.db, path)
+        except backup.BackupError as error:
+            self._tell("The backup was not saved", str(error))
+            return False
+        extra = f" and {info.sounds} sound{'s' if info.sounds != 1 else ''}" if info.sounds else ""
+        self.ctx.toast(f"Backed up everything{extra} to {path.name}")
+        return True
+
+    def ask_restore(self, path: Path) -> None:
+        """Check the file, say what it is, and only then ask. Nothing changes until the person agrees."""
+        try:
+            info = backup.read_backup_info(path)
+        except backup.BackupError as error:
+            self._tell("This cannot be restored", str(error))
+            return
+        confirm(
+            self, "Replace everything with this backup?",
+            f"Made on {info.created_text} by version {info.app_version}. Everything the app stores now "
+            "(settings, reminders, routine, tasks, days, habits and rules) is replaced by what is in the backup. "
+            "A copy of the current data is kept first. The prayer-time CSV files are not touched.",
+            "Restore", lambda: self.restore_backup(path),
+        )
+
+    def restore_backup(self, path: Path) -> bool:
+        try:
+            result = backup.restore_backup(self.ctx.db, path)
+        except backup.BackupError as error:
+            self._tell("The backup was not restored", str(error))
+            return False
+        apply_theme(self.ctx.settings.theme)
+        parent = self.get_transient_for()
+        app = parent.get_application() if parent else None
+        if app and hasattr(app, "apply_tray"):
+            app.apply_tray()
+        self.ctx.changed("all")
+        self.ctx.toast(f"Restored the backup from {result.info.created_text}")
+        self.close()  # this window still shows the old values
+        return True
+
+    def _on_tray(self, row, _pspec) -> None:
+        self.ctx.settings.tray_icon = row.get_active()
+        parent = self.get_transient_for()
+        app = parent.get_application() if parent else None
+        if app and hasattr(app, "apply_tray"):
+            app.apply_tray()
+        if row.get_active():
+            self.ctx.toast("The icon appears if your desktop has a system tray.")
+
+    def _on_habit_calendar(self, row, _pspec) -> None:
+        self.ctx.settings.habit_calendar = row.get_active()
+        self.ctx.changed("habits")
+
+    def _on_selftest(self, *_args) -> None:
+        settings = self.ctx.settings
+        settings.selftest_mode = SELFTEST_MODES[self.selftest_row.get_selected()]
+        settings.selftest_hours = int(self.selftest_hours.get_value())
+        self.selftest_hours.set_visible(settings.selftest_mode == "interval")
+        self.ctx.changed("tasks")
+
+    def _on_show_prayers(self, row, _pspec) -> None:
+        self.ctx.settings.show_prayers = row.get_active()
+        self.ctx.changed("tasks")
 
     def _on_order(self, row, _pspec) -> None:
         self.ctx.settings.task_order = ORDER_MODES[row.get_selected()]

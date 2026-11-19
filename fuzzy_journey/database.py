@@ -14,6 +14,9 @@ from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
+from . import selftest
+from .habits import KEYS as HABIT_KEYS
+from .habits import clamp as clamp_habit
 from .models import (
     PROGRESS_UNITS,
     SOUND_PRESETS,
@@ -30,11 +33,14 @@ from .models import (
 )
 from .paths import DATABASE_PATH, ensure_data_dir
 from .pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE, ManualPause, PomodoroSettings
+from .principles import DEFAULT_RECOVERY, DEFAULT_RULES, FIRST_COMPUTER_RULE, Principle, check_principle
 from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
+from .selftest import DEFAULT_HOURS, HOURS_RANGE, MODE_OFF, MODES
 from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
+from .timeutil import now as clock_now
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 9
 
 
 def _now_iso() -> str:
@@ -213,8 +219,63 @@ def _migrate_to_v6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v7(conn: sqlite3.Connection) -> None:
+    """Personal rules and the recovery plan: one small table, started with the default text once."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS principles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            section TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL DEFAULT '',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    now = _now_iso()
+    for defaults in (DEFAULT_RULES, DEFAULT_RECOVERY):
+        if conn.execute("SELECT 1 FROM principles WHERE section = ?", (defaults[0].section,)).fetchone():
+            continue  # already written (another process migrated first)
+        conn.executemany(
+            "INSERT INTO principles (section, title, body, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+            [(item.section, item.title, item.body, position, now, now) for position, item in enumerate(defaults)],
+        )
+
+
+def _migrate_to_v8(conn: sqlite3.Connection) -> None:
+    """Disruption days (a quarter of the work, or an offline day) ride on one extra column, and the
+    computer rule gains the \"off outside work time\" line, but only where the person never edited it."""
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(day_entries)")}
+    if "disruption" not in existing:
+        conn.execute("ALTER TABLE day_entries ADD COLUMN disruption TEXT")
+    current = next(item for item in DEFAULT_RULES if item.title == "Computer-use boundary")
+    conn.execute(
+        "UPDATE principles SET body = ?, updated_at = ? WHERE section = 'rules' AND title = ? AND body = ?",
+        (current.body, _now_iso(), current.title, FIRST_COMPUTER_RULE),
+    )
+
+
+def _migrate_to_v9(conn: sqlite3.Connection) -> None:
+    """The private habit calendar: how many times each habit happened on a day (a day with none has no row)."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS habit_days (
+            day_date TEXT PRIMARY KEY,
+            masturbation INTEGER NOT NULL DEFAULT 0,
+            porn INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 #: Append new migrations here; never edit an old one.
-MIGRATIONS = (_migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6)
+MIGRATIONS = (
+    _migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6, _migrate_to_v7,
+    _migrate_to_v8, _migrate_to_v9,
+)
 
 
 # --------------------------------------------------------------------------
@@ -441,6 +502,89 @@ class Database:
         with self.transaction() as conn:
             conn.execute("DELETE FROM routine_blocks WHERE id=?", (activity_id,))
 
+    # -- personal rules and the recovery plan ------------------------------
+
+    def list_principles(self, section: str) -> list[Principle]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM principles WHERE section = ? ORDER BY position, id", (section,)
+            ).fetchall()
+        return [
+            Principle(row["section"], row["title"], row["body"], id=row["id"], position=row["position"])
+            for row in rows
+        ]
+
+    def save_principle(self, item: Principle) -> int:
+        problem = check_principle(item.section, item.title, item.body)
+        if problem:
+            raise ValueError(problem)
+        now = _now_iso()
+        title, body = item.title.strip(), item.body.strip()
+        with self.transaction(immediate=True) as conn:
+            if item.id is None:
+                last = conn.execute(
+                    "SELECT COALESCE(MAX(position), -1) FROM principles WHERE section = ?", (item.section,)
+                ).fetchone()[0]
+                cursor = conn.execute(
+                    """INSERT INTO principles (section, title, body, position, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (item.section, title, body, last + 1, now, now),
+                )
+                item.id, item.position = int(cursor.lastrowid), last + 1
+            else:
+                conn.execute(
+                    "UPDATE principles SET title=?, body=?, updated_at=? WHERE id=?", (title, body, now, item.id)
+                )
+        item.title, item.body = title, body
+        return item.id
+
+    def delete_principle(self, principle_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM principles WHERE id=?", (principle_id,))
+
+    def move_principle(self, item: Principle, direction: int) -> bool:
+        """Move one entry up (-1) or down (+1) within its section. False when it is already at the end."""
+        if item.id is None:
+            return False
+        with self.transaction(immediate=True) as conn:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM principles WHERE section = ? ORDER BY position, id", (item.section,)
+            )]
+            if item.id not in ids:
+                return False
+            at = ids.index(item.id)
+            to = at + direction
+            if not 0 <= to < len(ids):
+                return False
+            ids[at], ids[to] = ids[to], ids[at]
+            conn.executemany("UPDATE principles SET position=? WHERE id=?", [(i, pid) for i, pid in enumerate(ids)])
+        return True
+
+    # -- habit calendar ----------------------------------------------------
+
+    def habit_counts(self, start: date, end: date) -> dict[date, dict[str, int]]:
+        """Per day with any mark: how many times each habit happened."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM habit_days WHERE day_date BETWEEN ? AND ? ORDER BY day_date",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return {date.fromisoformat(r["day_date"]): {key: int(r[key]) for key in HABIT_KEYS} for r in rows}
+
+    def set_habit_day(self, day: date, counts: dict[str, int]) -> None:
+        """Save a day's counts. A day where nothing happened keeps no row."""
+        values = {key: clamp_habit(counts.get(key, 0)) for key in HABIT_KEYS}
+        with self.transaction() as conn:
+            if not any(values.values()):
+                conn.execute("DELETE FROM habit_days WHERE day_date=?", (day.isoformat(),))
+                return
+            conn.execute(
+                """INSERT INTO habit_days(day_date, masturbation, porn, updated_at) VALUES (?, ?, ?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET masturbation=excluded.masturbation,
+                       porn=excluded.porn, updated_at=excluded.updated_at""",
+                (day.isoformat(), values["masturbation"], values["porn"], _now_iso()),
+            )
+
     # -- prayer alarms -----------------------------------------------------
 
     def prayer_alarms(self) -> dict[str, PrayerAlarm]:
@@ -480,22 +624,31 @@ class Database:
     # -- day entries -------------------------------------------------------
 
     def set_day_kind(self, day: date, kind: DayKind, note: str = "", start: time | None = None) -> None:
-        """Mark a day. ``RECOVERED`` is a Steady entry plus the time the day began; saving it
-        again without ``start`` (to change a note) keeps the time already stored."""
+        """Mark a day. ``RECOVERED`` is a Steady entry plus the time the day began; ``DISRUPTION`` and
+        ``OFFLINE`` are Steady entries plus ``disruption``. Saving a day again without ``start`` (to
+        change a note) keeps the time already stored. Any other kind clears both.
+
+        A disruption day has no evening or night work, so those are cleared with it."""
         recovered = kind is DayKind.RECOVERED
-        code = DayKind.STEADY.value if recovered else kind.value
+        stored_as_steady = recovered or kind.is_disruption
+        code = DayKind.STEADY.value if stored_as_steady else kind.value
+        disruption = {DayKind.DISRUPTION: "25", DayKind.OFFLINE: "offline"}.get(kind)
         with self.transaction() as conn:
             conn.execute(
-                """INSERT INTO day_entries(day_date, day_type, notes, updated_at, start_time)
-                   VALUES (:day, :code, :note, :now, :start)
+                """INSERT INTO day_entries(day_date, day_type, notes, updated_at, start_time, disruption)
+                   VALUES (:day, :code, :note, :now, :start, :disruption)
                    ON CONFLICT(day_date) DO UPDATE SET
                        day_type=excluded.day_type, notes=excluded.notes, updated_at=excluded.updated_at,
-                       overtime_minutes=CASE WHEN excluded.day_type='off' THEN 0 ELSE day_entries.overtime_minutes END,
-                       evening_minutes=CASE WHEN excluded.day_type='off' THEN 0 ELSE day_entries.evening_minutes END,
+                       overtime_minutes=CASE WHEN excluded.day_type='off' OR :no_extra
+                                             THEN 0 ELSE day_entries.overtime_minutes END,
+                       evening_minutes=CASE WHEN excluded.day_type='off' OR :no_extra
+                                            THEN 0 ELSE day_entries.evening_minutes END,
+                       disruption=excluded.disruption,
                        start_time=CASE WHEN :recovered
                                        THEN COALESCE(excluded.start_time, day_entries.start_time) ELSE NULL END""",
                 {"day": day.isoformat(), "code": code, "note": note, "now": _now_iso(),
-                 "start": start.strftime("%H:%M") if recovered and start else None, "recovered": int(recovered)},
+                 "start": start.strftime("%H:%M") if recovered and start else None, "recovered": int(recovered),
+                 "disruption": disruption, "no_extra": int(kind.is_disruption)},
             )
 
     def set_day_overtime(self, day: date, minutes: int) -> None:
@@ -523,7 +676,8 @@ class Database:
     def day_entries(self, start: date, end: date) -> dict[date, DayEntry]:
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT day_date, day_type, notes, start_time, overtime_minutes, evening_minutes FROM day_entries "
+                "SELECT day_date, day_type, notes, start_time, overtime_minutes, evening_minutes, disruption "
+                "FROM day_entries "
                 "WHERE day_date BETWEEN ? AND ? ORDER BY day_date",
                 (start.isoformat(), end.isoformat()),
             ).fetchall()
@@ -531,7 +685,9 @@ class Database:
         for row in rows:
             day = date.fromisoformat(row["day_date"])
             kind, started = DayKind.from_code(row["day_type"]), None
-            if kind is DayKind.STEADY and row["start_time"]:
+            if kind is DayKind.STEADY and row["disruption"] in ("25", "offline"):
+                kind = DayKind.DISRUPTION if row["disruption"] == "25" else DayKind.OFFLINE
+            elif kind is DayKind.STEADY and row["start_time"]:
                 try:
                     started, kind = parse_clock(row["start_time"]), DayKind.RECOVERED
                 except ValueError:
@@ -562,10 +718,18 @@ class Database:
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE day_date=? ORDER BY position, id", (day.isoformat(),)
             ).fetchall()
-        return [t for t in map(self._task, rows) if prayers or not t.is_prayer]
+        show_prayers = prayers and self.settings.show_prayers
+        show_selftests = prayers and self.settings.selftest_mode != MODE_OFF
+        return [
+            t for t in map(self._task, rows)
+            if not t.is_routine or (show_prayers if t.is_prayer else show_selftests)
+        ]
 
     def ensure_prayer_tasks(self, day: date) -> None:
-        """Give ``day`` its five prayers. Safe to call any number of times."""
+        """Give ``day`` its five prayers. Safe to call any number of times. Does nothing when the
+        person has turned prayers off as tasks."""
+        if not self.settings.show_prayers:
+            return
         with self.transaction(immediate=True) as conn:
             have = {r[0] for r in conn.execute(
                 "SELECT title FROM tasks WHERE day_date=? AND kind='prayer' AND origin_id IS NULL",
@@ -579,14 +743,33 @@ class Database:
                         (day.isoformat(), name, position, _now_iso()),
                     )
 
+    def add_selftest_task(self, day: date, moment: datetime) -> bool:
+        """Add the self-test for ``moment`` to ``day``. False when it is already there."""
+        title = selftest.title_for(moment)
+        with self.transaction(immediate=True) as conn:
+            if conn.execute(
+                "SELECT 1 FROM tasks WHERE day_date=? AND kind='selftest' AND title=?", (day.isoformat(), title)
+            ).fetchone():
+                return False
+            position = conn.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE day_date=?", (day.isoformat(),)
+            ).fetchone()[0]
+            conn.execute(
+                """INSERT INTO tasks(day_date, title, minutes, level, position, status, kind, created_at)
+                   VALUES (?, ?, 0, 2, ?, 'unset', 'selftest', ?)""",
+                (day.isoformat(), title, position, _now_iso()),
+            )
+        return True
+
     def unset_tasks_before(self, day: date) -> list[Task]:
-        """Tasks from earlier days that still have no status."""
+        """Tasks from earlier days that still have no status (prayers only while they are shown)."""
         with self.connection() as conn:
             rows = conn.execute(
                 "SELECT * FROM tasks WHERE day_date<? AND status='unset' ORDER BY day_date, position, id",
                 (day.isoformat(),),
             ).fetchall()
-        return [self._task(r) for r in rows]
+        show_prayers = self.settings.show_prayers
+        return [t for t in map(self._task, rows) if not t.is_selftest and (show_prayers or not t.is_prayer)]
 
     def save_task(self, task: Task) -> int:
         with self.transaction() as conn:
@@ -1010,3 +1193,64 @@ class Settings:
     @welcome_seen.setter
     def welcome_seen(self, value: bool) -> None:
         self.set("welcome_seen", "1" if value else "")
+
+    @property
+    def show_prayers(self) -> bool:
+        """The five prayers appear as tasks. Off for anyone who does not pray; the timetable still sets the day."""
+        return self._flag("show_prayers", True)
+
+    @show_prayers.setter
+    def show_prayers(self, value: bool) -> None:
+        self.set("show_prayers", "1" if value else "0")
+
+    @property
+    def selftest_mode(self) -> str:
+        """When a *Test myself* task is added to the day: ``off``, ``prayers`` (at each prayer) or ``interval``."""
+        mode = self.get("selftest_mode", MODE_OFF)
+        return mode if mode in MODES else MODE_OFF
+
+    @selftest_mode.setter
+    def selftest_mode(self, value: str) -> None:
+        self.set("selftest_mode", value if value in MODES else MODE_OFF)
+
+    @property
+    def selftest_hours(self) -> int:
+        """Hours between self-tests in ``interval`` mode."""
+        try:
+            return min(HOURS_RANGE[1], max(HOURS_RANGE[0], int(self.get("selftest_hours", str(DEFAULT_HOURS)))))
+        except ValueError:
+            return DEFAULT_HOURS
+
+    @selftest_hours.setter
+    def selftest_hours(self, value: int) -> None:
+        self.set("selftest_hours", str(int(value)))
+
+    @property
+    def habit_calendar(self) -> bool:
+        """The habit calendar page is shown. Off hides the page; nothing is deleted."""
+        return self._flag("habit_calendar", True)
+
+    @habit_calendar.setter
+    def habit_calendar(self, value: bool) -> None:
+        self.set("habit_calendar", "1" if value else "0")
+
+    def habit_start(self, key: str) -> date:
+        """The day a habit's figures start counting. The first time it is asked it becomes today."""
+        try:
+            return date.fromisoformat(self.get(f"habit_start_{key}", ""))
+        except ValueError:
+            today = clock_now().date()
+            self.set(f"habit_start_{key}", today.isoformat())
+            return today
+
+    def set_habit_start(self, key: str, value: date) -> None:
+        self.set(f"habit_start_{key}", value.isoformat())
+
+    @property
+    def tray_icon(self) -> bool:
+        """Show an icon in the system tray. Closing the window then hides it there (when a tray exists)."""
+        return self._flag("tray_icon", False)
+
+    @tray_icon.setter
+    def tray_icon(self, value: bool) -> None:
+        self.set("tray_icon", "1" if value else "0")

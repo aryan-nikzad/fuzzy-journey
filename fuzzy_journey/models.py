@@ -263,11 +263,20 @@ class Task:
     status: TaskStatus = TaskStatus.UNSET
     origin_id: int | None = None  # the task this one was carried over from
     id: int | None = None
-    kind: str = "task"  # "prayer" for the five daily prayers: zero length, never focus time
+    kind: str = "task"  # "prayer" (the five daily prayers) or "selftest": zero length, never focus time
 
     @property
     def is_prayer(self) -> bool:
         return self.kind == "prayer"
+
+    @property
+    def is_selftest(self) -> bool:
+        return self.kind == "selftest"
+
+    @property
+    def is_routine(self) -> bool:
+        """Prayers and self-tests: zero-length tasks that belong to the day, not to a plan."""
+        return self.kind in ("prayer", "selftest")
 
     @property
     def level_label(self) -> str:

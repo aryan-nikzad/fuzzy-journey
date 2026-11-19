@@ -43,6 +43,8 @@ NOON_LIMIT = time(14, 0)
 #: Where evening work begins by default, and the earliest it may be set.
 DEFAULT_EVENING_START = time(18, 0)
 MIN_EVENING_START = NOON_LIMIT
+#: The share of a normal day's work that a Disruption day keeps.
+DISRUPTION_SHARE = 0.25
 
 
 # --------------------------------------------------------------------------
@@ -59,23 +61,52 @@ class DayKind(Enum):
     #: A Steady day that began late: half of the time you are awake, afternoon allowed.
     #: Stored as a Steady entry with a start time, so older versions still read it.
     RECOVERED = "recovered"
+    #: A day that something bad and unpredictable (an illness, a death in the family) made too hard:
+    #: a quarter of a normal day's work, the rest left empty. Routine carries on. Neutral for the bank.
+    #: Stored as a Steady entry with ``day_entries.disruption`` set, so older versions read a Steady day.
+    DISRUPTION = "disruption"
+    #: The fuller fallback of a disruption: no work, stay home, computer off. Neutral for the bank.
+    OFFLINE = "offline"
 
     @property
     def share(self) -> float:
-        return {DayKind.STEADY: 0.50, DayKind.PUSH: 0.75, DayKind.REST: 0.0, DayKind.RECOVERED: 0.50}[self]
+        return {
+            DayKind.STEADY: 0.50, DayKind.PUSH: 0.75, DayKind.REST: 0.0, DayKind.RECOVERED: 0.50,
+            DayKind.DISRUPTION: DISRUPTION_SHARE, DayKind.OFFLINE: 0.0,
+        }[self]
 
     @property
     def bank_delta(self) -> float:
         """Days added to (or taken from) the bank by one day of this kind."""
-        return {DayKind.STEADY: 0.0, DayKind.PUSH: 0.5, DayKind.REST: -1.0, DayKind.RECOVERED: 0.0}[self]
+        return {DayKind.PUSH: 0.5, DayKind.REST: -1.0}.get(self, 0.0)
+
+    @property
+    def no_work(self) -> bool:
+        """A day with no work at all."""
+        return self in (DayKind.REST, DayKind.OFFLINE)
+
+    @property
+    def is_disruption(self) -> bool:
+        return self in (DayKind.DISRUPTION, DayKind.OFFLINE)
+
+    @property
+    def allows_extra_work(self) -> bool:
+        """Evening and night work are only ever offered on an ordinary working day."""
+        return self in (DayKind.STEADY, DayKind.PUSH, DayKind.RECOVERED)
 
     @property
     def label(self) -> str:
-        return {DayKind.STEADY: "Steady", DayKind.PUSH: "Push", DayKind.REST: "Rest", DayKind.RECOVERED: "Recovered"}[self]
+        return {
+            DayKind.STEADY: "Steady", DayKind.PUSH: "Push", DayKind.REST: "Rest", DayKind.RECOVERED: "Recovered",
+            DayKind.DISRUPTION: "Disruption", DayKind.OFFLINE: "Offline",
+        }[self]
 
     @property
     def percent(self) -> str:
-        return {DayKind.STEADY: "50%", DayKind.PUSH: "75%", DayKind.REST: "Rest day", DayKind.RECOVERED: "50% from waking"}[self]
+        return {
+            DayKind.STEADY: "50%", DayKind.PUSH: "75%", DayKind.REST: "Rest day",
+            DayKind.RECOVERED: "50% from waking", DayKind.DISRUPTION: "25%", DayKind.OFFLINE: "No work",
+        }[self]
 
     @property
     def blurb(self) -> str:
@@ -84,6 +115,8 @@ class DayKind(Enum):
             DayKind.PUSH: "Three quarters of the day for work. Banks half a day.",
             DayKind.REST: "No work today. Spends one day from the bank.",
             DayKind.RECOVERED: "You woke late. Half of the time you are awake, afternoon included. Neutral for the bank.",
+            DayKind.DISRUPTION: "A quarter of a normal day's work. Routine carries on. Neutral for the bank.",
+            DayKind.OFFLINE: "No work. Stay home with the computer off. Neutral for the bank.",
         }[self]
 
     @classmethod
@@ -332,7 +365,8 @@ def plan_day(
 
     ``overtime`` is work added after the last prayer, at night. It begins at Isha
     (or when the last block ends, if later), pushes bedtime out, and is paid for
-    in sleep, which ``sleep_lost`` shows. Rest days have none.
+    in sleep, which ``sleep_lost`` shows. Only an ordinary working day can have it: Rest, Disruption and
+    Offline days never do.
     """
     fajr_at = datetime.combine(day, fajr)
     isha_at = datetime.combine(day, isha)
@@ -341,7 +375,7 @@ def plan_day(
     next_fajr_at = datetime.combine(day + timedelta(days=1), next_fajr or fajr)
 
     wake_at = fajr_at
-    if kind is DayKind.REST:
+    if kind.no_work:
         target = timedelta(0)
         morning = evening = None
     elif kind is DayKind.RECOVERED:
@@ -359,7 +393,7 @@ def plan_day(
         evening = Span(blocks.block2_start, blocks.block2_start + overflow) if overflow > timedelta(0) else None
 
     extra = _whole_minutes(evening_extra)
-    if kind is not DayKind.REST and extra > timedelta(0):
+    if kind.allows_extra_work and extra > timedelta(0):
         if evening:
             evening = Span(evening.start, evening.end + extra)
         else:
@@ -371,7 +405,7 @@ def plan_day(
     # Evening work is the last resort: it only pushes bedtime when it runs past Isha.
     last_end = evening.end if evening else (morning.end if kind is DayKind.RECOVERED and morning else None)
     late = None  # night work, after the last prayer
-    if kind is not DayKind.REST and overtime > timedelta(0):
+    if kind.allows_extra_work and overtime > timedelta(0):
         begin = max(isha_at, last_end or isha_at)
         late = Span(begin, begin + _whole_minutes(overtime))
     bedtime = max(late.end if late else (last_end or isha_at), isha_at)
