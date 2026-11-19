@@ -57,13 +57,19 @@ No account, no cloud. Alarms ring without internet.
 
 - Not a project manager or a calendar. It shapes the *day*. Tasks are only what fits in a day's focus time: no projects, tags, due dates or priorities beyond order and importance.
 - Not a productivity score. There are no streaks, no points, nothing to feel bad about.
-- Not a prayer-time app. Prayer times are the *frame* of the day; the app does not teach or judge your practice. The five prayers can be ticked off as zero-length tasks, but that is only your own record: no streaks, no scores, never counted as focus time.
+- Not a prayer-time app. Prayer times are the *frame* of the day; the app does not teach or judge your practice. The five prayers can be ticked off as zero-length tasks, but that is only your own record: no streaks, no scores, never counted as focus time. If you do not pray, switch them off in Preferences: the timetable still frames the day, and nothing is deleted.
 
 ## When the day goes wrong: a Recovered day
 
 Sometimes you wake late. The Steady plan then asks for work that has already slipped away, so the day is rescued instead of abandoned. On a **Recovered** day the day begins when you really woke, and work is half of the time you are awake from then to Isha. It may run into the afternoon, which is the one place the afternoon is not yours.
 
 It is a rescue, not a plan. It is never offered next to Steady, Push and Rest; it appears only as *I overslept…* on a Steady day. It is neutral for the bank (it counts as Steady), it never shortens your night, and the pomodoro, planning and tasks follow the new window like any other day.
+
+## A hard day: Disruption mode
+
+Some days nobody can plan around: a cold that leaves you too weak to work, someone you love dying, an emergency. A plan that only works when everything goes well is an incomplete plan, so on such a day you change the *scale* of the plan instead of abandoning it. It is a choice you make, never a punishment the app applies for missed tasks.
+
+A **Disruption** day keeps a quarter of a normal day's work and leaves the other three quarters empty. Everything else you set carries on as planned: prayers, the gym, reading, the rest of the routine. The fuller fallback is an **Offline** day: no work, stay home, computer off, and if you do not want to do the routine that day, you may skip it. Both are neutral for the bank, take no evening or night work, and appear only as *A hard day…* on Today. *Back to normal* is one click. Tasks that no longer fit are not pushed into tomorrow for you: you settle them yourself.
 
 ## Night work: allowed, never recommended
 

@@ -49,8 +49,12 @@ To try it without installing: `./run.sh`.
 | **Bank** | Your balance of rest, and a calendar to mark Push and Rest days, today or in the past. |
 | **Alarms** | Reminders, prayer alarms that follow the timetable, and whether the alarm service is running. |
 | **Prayers** | The timetable for the year. |
+| **Recall** | Test yourself: your rules, recovery plan, today's shape, today's and tomorrow's tasks, prayers, reminders and routine, all hidden. Say each aloud, then tap to check. Nothing is graded or stored. |
+| **Habits** | A private calendar for two habits, counted on their own: per day a checkbox and how many times. Each has its own *Counting from* date that only changes what is counted, never erasing a day. Weekly and monthly averages appear only after 7 and 30 days have passed. It can be turned off in Preferences. |
+| **Rules** | Your must-do rules of life, in your own words (for example, the computer is for work only). Add, edit and delete them. Words only: they never change the schedule. |
+| **Recovery** | The plan for a day that went wrong, as short numbered steps you can edit and reorder. **Test myself** hides the steps so you can say them from memory first. It is a backup for the plan in your head, never a replacement for it. |
 
-Shortcuts: `Ctrl+1`…`Ctrl+6` switch screens, `Ctrl+.` stop a ringing alarm, `Ctrl+,` preferences, `F1` philosophy, `Ctrl+Q` quit.
+Shortcuts: `Ctrl+1`…`Ctrl+9` switch screens, `Ctrl+.` stop a ringing alarm, `Ctrl+,` preferences, `F1` philosophy, `Ctrl+Q` quit.
 
 **First launch:** the app ships with the 2026 timetable for Shahrekord. For another place or year, open **Menu → Preferences**, set your location, and download the timetable. That is the only time the internet is needed.
 
@@ -65,6 +69,30 @@ For January 1st in Shahrekord (Fajr 05:42, Isha 18:20, so the day is 12 h 38 min
 | **Rest** | none | none | 18:20 | none |
 
 A 07:30-08:00 call during Steady work moves the finish from 12:01 to 12:31. The work is still 6 h 19 min. Personal *Wake* and *Sleep* activities override the Fajr and Isha defaults.
+
+## A hard day: Disruption mode
+
+For a day when something bad and unpredictable happens (a cold, a death in the family), **A hard day…** on Today switches the day to a quarter of a normal day's work (**Work 25%**), or to **Stay home, computer off**: no work, and you may skip the routine too. Prayers, exercise and the rest of the routine otherwise carry on. Neither touches the bank, neither allows evening or night work, and **Back to normal** undoes it in one click. Tasks that no longer fit wait for you to settle them; nothing is pushed into tomorrow for you.
+
+**Settle today…** and **Plan tomorrow** are under the task list at any hour. If today's focus time is not over yet, settling asks first. **Settle earlier days…** and **Settle today's tasks…** are also in the main menu. *Show the five prayers as tasks* in Preferences turns the prayers off for anyone who does not pray.
+
+## Backup and restore
+
+Preferences → *Backup and restore*. **Back up everything…** writes one `.zip` holding your settings, reminders, routine, tasks, days, habit calendar, rules, recovery plan, the bank, and your own alarm sounds. **Restore from a backup…** puts it all back, on this computer or a new one. The file is checked before anything changes; a copy of the data you had is kept first (in `backup/` inside the data folder); a backup from an older version is upgraded; one from a newer version is refused with a clear message. It holds your private data (including the habit calendar), so keep it somewhere safe.
+
+The prayer-time CSV files are deliberately **not** in the backup: they are not app state. Copy them into the data folder or fetch them again, exactly as before; they work on their own.
+
+## System tray
+
+*Show an icon in the system tray* in Preferences adds a tray icon. Click it to show or hide the window; right-click for *Show*, *Settle today's tasks…* and *Quit*. With the icon on, closing the window hides it in the tray and the app keeps running. It uses the standard StatusNotifierItem protocol, so it works on KDE Plasma, XFCE, Cinnamon and MATE out of the box, and on GNOME with the AppIndicator extension. It never traps you: if no tray is found (or it goes away), closing the window simply closes the app as before. The alarm service is separate and rings either way.
+
+## The habit calendar
+
+**Habits** is a private page for two habits, each counted separately: per day, a checkbox for *did it happen* and a count for *how many times*. Each habit has its own **Counting from** date. Moving it changes only what the figures include: earlier days keep their marks and can still be edited, nothing is wiped. The figures are the last 7 days and the last 30 days (times, times a day, days it happened, days without) and the whole time since the start. A figure is never shown early: the weekly one needs seven finished days since the start, the monthly one thirty, and the page says how many days are still to go. Today is counted tomorrow, when it is finished. Turn the page off in Preferences (*Habit calendar*); that hides it and keeps your data.
+
+## Regular self-tests
+
+In Preferences, *Add a self-test task* adds a **Test myself** task to Today at each prayer time, or every few hours from when you wake until bed. It is a zero-length task: tick it after you have said your rules, plan and day from memory (its **Open Recall** button takes you to the Recall page). Like the prayers it is only a record for you: never focus time, never carried to another day, never asked about in a review. Only the most recent due test is added, so a day you were away from the computer does not pile up. The background alarm service adds it too, with a quiet notification, even when the window is closed.
 
 ## When you overslept: a Recovered day
 

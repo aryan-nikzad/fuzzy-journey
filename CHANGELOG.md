@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Hard days, Recall, and settling at any time
+- **Disruption mode.** *A hard day…* on Today switches the day to **Work 25%** (a quarter of a normal day's work; prayers, exercise and routine carry on) or **Stay home, computer off** (no work; routine optional). Both are neutral for the bank, take no evening or night work, can be undone with *Back to normal*, and show on the Bank calendar. Work alarms stay silent on an Offline day. Schema 8 adds one `day_entries.disruption` column; older versions read such a day as Steady.
+- **Recall** is a new page for testing yourself, the way *Test myself* works on Recovery: rules, recovery steps, today's shape, today's and tomorrow's tasks, prayer times, reminders and routine are hidden until you say them and tap. Nothing is graded or stored.
+- **Settle whenever you like.** *Settle today…*, *Settle earlier days…* and *Plan tomorrow* sit under the task list at any hour, and in the main menu. Settling today before its focus time is over asks first and never snoozes itself.
+- **Prayers as tasks can be switched off** in Preferences for anyone who does not pray. Nothing is deleted; the timetable still frames the day.
+- The default *Computer-use boundary* rule now also says the PC is off outside work time. An existing copy is upgraded only if you never edited it.
+- Ctrl+9 opens the ninth page.
+
+### Backup and restore
+- Preferences → *Backup and restore*: **Back up everything…** saves one `.zip` (a consistent database snapshot, your personal sounds, and a manifest) and **Restore from a backup…** brings it all back. Restoring checks the file first (valid zip, this app's backup, undamaged data, not from a newer version, no unsafe file names), keeps a copy of the current data in `backup/before-restore-*.sqlite3`, re-points sound paths to the restored copies, and upgrades an older backup to the current schema. The prayer-time CSV files are not included and keep working on their own. New module `backup.py` (no GTK).
+
+### System tray
+- Preferences → *System tray*: an optional tray icon (off by default). Click to show or hide the window; the menu has *Show*, *Settle today’s tasks…* and *Quit*. Closing the window hides it into the tray, but only while a tray watcher really exists, so a desktop without one never leaves the app unreachable. Speaks StatusNotifierItem and dbusmenu directly through Gio: no new dependencies (GNOME needs the AppIndicator extension). Tested against a private D-Bus with a fake watcher.
+
+### Habit calendar
+- New **Habits** page: a private calendar of two habits, each with its own checkbox, a count of times, and its own *Counting from* date. The start date changes only what is counted; earlier days keep their marks and stay editable. Last-7-days and last-30-days figures (times a day, times, days with, days without) and a since-the-start figure appear only after 7 and 30 finished days have passed since the start; today is counted tomorrow. Can be switched off in Preferences (hides the page, keeps the data). Schema 9 adds a `habit_days` table; new module `habits.py` (no GTK).
+
+### Regular self-tests
+- Preferences → *Test myself*: add a zero-length **Test myself** task at each prayer time, or every 1 to 12 hours between waking and bed. Tick it after saying your plan from memory; *Open Recall* goes to the page. Never focus time, never carried over, never nagged about in a review. Only the latest due test is added, once. The alarm service adds it and sends a quiet notification even with the window closed. New module `selftest.py` (no GTK); settings `selftest_mode` and `selftest_hours`; no schema change.
+
+### Rules and Recovery
+- **Rules** is a page for the must-do rules of your life, written in your own words and shown as short bullet lists. It starts with three: *Computer-use boundary*, *Disruption Mode* (a workload of 25%, routine kept, and an offline fallback) and *Brain-first planning*. Add, edit, reorder and delete them.
+- **Recovery** is a page for the plan to follow when a day goes wrong: numbered steps you can edit and reorder, starting with six short ones. *Test myself* hides the steps so you can say them from memory and reveal each to check. The page says what it is: a backup for the plan in your head.
+- These pages are words only. *Disruption Mode* is written down, not yet a day kind: it does not change the work target, the bank or any plan. `Ctrl+7` and `Ctrl+8` open the two pages.
+- Schema 7 adds one `principles` table, seeded once with the starting text; anything you delete stays deleted. New module `principles.py` (no GTK).
+
 ### Fixed
 - **One pause model.** The Pause button used to move only the pomodoro blocks while the work clock ignored it, so Today could say *39 min left, finishes 16:39* while the focus block had 47 minutes left and ended in the middle of the gym. A manual pause is now a pause like any other: the work clock and the pomodoro schedule are laid out from the same pauses and always agree. A pause that overlaps an activity merges with it and is named for the activity.
 - **Nothing runs past bedtime.** However long the pauses, work and planning stop at bedtime. The focus that no longer fits is cut (planning keeps its place at the end) and Today says how much was cut.
