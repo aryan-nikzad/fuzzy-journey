@@ -30,6 +30,16 @@ from .flex import (
     Run,
     check_routine_item,
 )
+from .goals import (
+    KIND_GREAT,
+    KIND_HORIZON,
+    MAX_HORIZONS,
+    MAX_STATEMENTS,
+    Goal,
+    SelfStatement,
+    check_goal,
+    check_self,
+)
 from .habits import MAX_HABITS, Habit, check_habit
 from .habits import clamp as clamp_habit
 from .ideas import MAX_IDEAS, Idea, check_idea, reordered
@@ -55,7 +65,7 @@ from .selftest import DEFAULT_HOURS, HOURS_RANGE, MODE_OFF, MODES
 from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def _now_iso() -> str:
@@ -373,10 +383,38 @@ def _migrate_to_v12(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v13(conn: sqlite3.Connection) -> None:
+    """Goals (one great goal and its horizons) and the self-image. Everyone starts with none: every word is theirs."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL CHECK (kind IN ('great', 'horizon')),
+            title TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            reached_at TEXT,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS goals_one_great ON goals(kind) WHERE kind = 'great';
+        CREATE TABLE IF NOT EXISTS self_image (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            statement TEXT NOT NULL,
+            feeling TEXT NOT NULL DEFAULT '',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 #: Append new migrations here; never edit an old one.
 MIGRATIONS = (
     _migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6, _migrate_to_v7,
     _migrate_to_v8, _migrate_to_v9, _migrate_to_v10, _migrate_to_v11, _migrate_to_v12,
+    _migrate_to_v13,
 )
 
 
@@ -660,6 +698,144 @@ class Database:
                 return False
             ids[at], ids[to] = ids[to], ids[at]
             conn.executemany("UPDATE principles SET position=? WHERE id=?", [(i, pid) for i, pid in enumerate(ids)])
+        return True
+
+    # -- goals and the self-image ------------------------------------------
+
+    @staticmethod
+    def _goal(row: sqlite3.Row) -> Goal:
+        return Goal(row["kind"], row["title"], row["note"], row["reached_at"] is not None,
+                    id=row["id"], position=row["position"])
+
+    def great_goal(self) -> Goal | None:
+        """The one goal your life is aimed at, or None until you name it."""
+        with self.connection() as conn:
+            row = conn.execute("SELECT * FROM goals WHERE kind = ?", (KIND_GREAT,)).fetchone()
+        return self._goal(row) if row else None
+
+    def horizons(self) -> list[Goal]:
+        """The sub-goals that make the great goal possible, in the order to reach them."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM goals WHERE kind = ? ORDER BY position, id", (KIND_HORIZON,)
+            ).fetchall()
+        return [self._goal(r) for r in rows]
+
+    def save_goal(self, goal: Goal) -> int:
+        """Add or change the great goal or a horizon. There is only ever one great goal: saving a second
+        replaces the words of the first. A new horizon goes to the end of the order."""
+        problem = check_goal(goal.kind, goal.title, goal.note)
+        if problem:
+            raise ValueError(problem)
+        now = _now_iso()
+        title, note = " ".join(goal.title.split()), goal.note.strip()
+        with self.transaction(immediate=True) as conn:
+            if goal.id is None and goal.kind == KIND_GREAT:
+                existing = conn.execute("SELECT id FROM goals WHERE kind = ?", (KIND_GREAT,)).fetchone()
+                if existing:
+                    goal.id = int(existing["id"])
+            if goal.id is None:
+                count, last = conn.execute(
+                    "SELECT COUNT(*), COALESCE(MAX(position), -1) FROM goals WHERE kind = ?", (goal.kind,)
+                ).fetchone()
+                if goal.kind == KIND_HORIZON and count >= MAX_HORIZONS:
+                    raise ValueError(f"There are already {MAX_HORIZONS} horizons. Delete or merge some first.")
+                reached = now if goal.reached and goal.kind == KIND_HORIZON else None
+                cursor = conn.execute(
+                    """INSERT INTO goals (kind, title, note, reached_at, position, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (goal.kind, title, note, reached, last + 1, now, now),
+                )
+                goal.id, goal.position = int(cursor.lastrowid), last + 1
+            else:
+                conn.execute("UPDATE goals SET title=?, note=?, updated_at=? WHERE id=?", (title, note, now, goal.id))
+                if goal.kind == KIND_HORIZON:
+                    self._write_reached(conn, goal.id, goal.reached, now)
+        goal.title, goal.note = title, note
+        return goal.id
+
+    @staticmethod
+    def _write_reached(conn: sqlite3.Connection, goal_id: int, reached: bool, now: str) -> None:
+        """Mark a horizon reached (keeping the moment it was first reached) or not reached."""
+        if reached:
+            conn.execute(
+                "UPDATE goals SET reached_at = COALESCE(reached_at, ?) WHERE id=? AND kind=?",
+                (now, goal_id, KIND_HORIZON),
+            )
+        else:
+            conn.execute("UPDATE goals SET reached_at = NULL WHERE id=? AND kind=?", (goal_id, KIND_HORIZON))
+
+    def set_horizon_reached(self, goal_id: int, reached: bool) -> None:
+        with self.transaction() as conn:
+            self._write_reached(conn, goal_id, reached, _now_iso())
+
+    def delete_goal(self, goal_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM goals WHERE id=?", (goal_id,))
+
+    def move_horizon(self, goal: Goal, direction: int) -> bool:
+        """Move a horizon up (-1, reached earlier) or down (+1, reached later). False at either end."""
+        if goal.id is None or goal.kind != KIND_HORIZON:
+            return False
+        with self.transaction(immediate=True) as conn:
+            ids = [r["id"] for r in conn.execute(
+                "SELECT id FROM goals WHERE kind = ? ORDER BY position, id", (KIND_HORIZON,))]
+            if goal.id not in ids:
+                return False
+            at = ids.index(goal.id)
+            to = at + direction
+            if not 0 <= to < len(ids):
+                return False
+            ids[at], ids[to] = ids[to], ids[at]
+            conn.executemany("UPDATE goals SET position=? WHERE id=?", [(i, gid) for i, gid in enumerate(ids)])
+        return True
+
+    def list_self_image(self) -> list[SelfStatement]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM self_image ORDER BY position, id").fetchall()
+        return [SelfStatement(r["statement"], r["feeling"], id=r["id"], position=r["position"]) for r in rows]
+
+    def save_self_statement(self, item: SelfStatement) -> int:
+        problem = check_self(item.statement, item.feeling)
+        if problem:
+            raise ValueError(problem)
+        now = _now_iso()
+        statement, feeling = " ".join(item.statement.split()), item.feeling.strip()
+        with self.transaction(immediate=True) as conn:
+            if item.id is None:
+                count, last = conn.execute("SELECT COUNT(*), COALESCE(MAX(position), -1) FROM self_image").fetchone()
+                if count >= MAX_STATEMENTS:
+                    raise ValueError(f"There are already {MAX_STATEMENTS} statements. Delete some first.")
+                cursor = conn.execute(
+                    "INSERT INTO self_image (statement, feeling, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (statement, feeling, last + 1, now, now),
+                )
+                item.id, item.position = int(cursor.lastrowid), last + 1
+            else:
+                conn.execute(
+                    "UPDATE self_image SET statement=?, feeling=?, updated_at=? WHERE id=?",
+                    (statement, feeling, now, item.id),
+                )
+        item.statement, item.feeling = statement, feeling
+        return item.id
+
+    def delete_self_statement(self, item_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM self_image WHERE id=?", (item_id,))
+
+    def move_self_statement(self, item: SelfStatement, direction: int) -> bool:
+        if item.id is None:
+            return False
+        with self.transaction(immediate=True) as conn:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM self_image ORDER BY position, id")]
+            if item.id not in ids:
+                return False
+            at = ids.index(item.id)
+            to = at + direction
+            if not 0 <= to < len(ids):
+                return False
+            ids[at], ids[to] = ids[to], ids[at]
+            conn.executemany("UPDATE self_image SET position=? WHERE id=?", [(i, sid) for i, sid in enumerate(ids)])
         return True
 
     # -- habit calendar ----------------------------------------------------

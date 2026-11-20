@@ -86,6 +86,9 @@ class MainWindow(Adw.ApplicationWindow):
         ("rules", "Rules", "checkbox-checked-symbolic"),
         ("recovery", "Recovery", "document-revert-symbolic"),
         ("recall", "Recall", "dialog-question-symbolic"),
+        # Placed after Recall so no Ctrl+1..9 shortcut moves.
+        ("goals", "Goals", "mark-location-symbolic"),
+        ("self", "Self-image", "avatar-default-symbolic"),
         ("habits", "Habits", "view-grid-symbolic"),
         ("ideas", "Ideas", "starred-symbolic"),
         # Flexibility pack pages: hidden unless the pack is on. They sit last so no shortcut moves.
@@ -96,6 +99,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _build_pages(self) -> None:
         from .pages.alarms import AlarmsPage
         from .pages.bank import BankPage
+        from .pages.goals import GoalsPage
         from .pages.habits import HabitsPage
         from .pages.ideas import IdeasPage
         from .pages.morning import MorningPage
@@ -105,12 +109,14 @@ class MainWindow(Adw.ApplicationWindow):
         from .pages.recovery import RecoveryPage
         from .pages.routine import RoutinePage
         from .pages.rules import RulesPage
+        from .pages.selfimage import SelfImagePage
         from .pages.today import TodayPage
         from .pages.tomorrow import TomorrowPage
 
         factories = {"today": TodayPage, "tomorrow": TomorrowPage, "routine": RoutinePage, "bank": BankPage,
                      "alarms": AlarmsPage, "prayers": PrayersPage, "rules": RulesPage, "recovery": RecoveryPage,
-                     "recall": RecallPage, "habits": HabitsPage, "ideas": IdeasPage,
+                     "recall": RecallPage, "goals": GoalsPage, "self": SelfImagePage,
+                     "habits": HabitsPage, "ideas": IdeasPage,
                      "morning": MorningPage, "worklog": WorkLogPage}
         for name, title, icon in self.PAGES:
             page = factories[name](self.ctx)

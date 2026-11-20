@@ -57,7 +57,7 @@ class RecallPage(Page):
     The plan lives in your head; this page is how you keep it there.
     """
 
-    listens_to = frozenset({"principles", "tasks", "alarms", "rhythm", "day", "data", "location"})
+    listens_to = frozenset({"principles", "goals", "self", "tasks", "alarms", "rhythm", "day", "data", "location"})
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
@@ -89,6 +89,15 @@ class RecallPage(Page):
         today = clock_now().date()
         tomorrow = today + timedelta(days=1)
         out: list[tuple[str, list[Item]]] = []
+
+        great = db.great_goal()
+        if great:
+            out.append(("My great goal", [Item("great", "Great goal", great.title, great.note)]))
+        out.append(("My horizons", [Item(str(h.id), f"Horizon {n}", h.title, h.note)
+                                    for n, h in enumerate(db.horizons(), start=1)]))
+        out.append(("Who I am", [Item(str(s.id), f"Statement {n}", s.statement, s.feeling,
+                                      hint="Say it as if it is true.")
+                                 for n, s in enumerate(db.list_self_image(), start=1)]))
 
         rules = db.list_principles(SECTION_RULES)
         out.append(("My rules", [Item(str(r.id), f"Rule {n}", r.title, "\n".join(r.lines))
