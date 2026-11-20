@@ -70,7 +70,7 @@ class UiSmokeTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_every_page_renders_and_refreshes(self):
-        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers", "rules", "recovery", "recall", "habits"])
+        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers", "rules", "recovery", "recall", "habits", "ideas"])
         for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "principles", "habits"):
             self.ctx.changed(scope)
 
@@ -416,6 +416,120 @@ class UiSmokeTests(unittest.TestCase):
         self.ctx.settings.habit_calendar = True
         self.ctx.changed("habits")
         self.assertTrue(stack_page.get_visible())
+
+    # -- idea bank ---------------------------------------------------------
+
+    def _flush(self):
+        from gi.repository import GLib
+
+        context = GLib.MainContext.default()
+        while context.pending():
+            context.iteration(False)
+
+    def _clear_ideas(self):
+        for idea in self.ctx.db.list_ideas():
+            self.ctx.db.delete_idea(idea.id)
+        self.ctx.changed("ideas")
+
+    def test_an_idea_is_captured_with_one_line_and_enter(self):
+        from fuzzy_journey.ui.dialogs.idea_dialog import IdeaDialog
+
+        self.addCleanup(self._clear_ideas)
+        page = self.window.pages["ideas"]
+        self.assertEqual(self.ctx.db.list_ideas(), [])
+        page.entry.set_text("   ")
+        page._capture()  # nothing typed: nothing saved, nothing asked
+        self.assertEqual(self.ctx.db.list_ideas(), [])
+        for text in ("Podcast about habits", "Learn to solder", "Rewrite the landing page"):
+            page.entry.set_text(text)
+            page._capture()
+            self.assertEqual(page.entry.get_text(), "")  # ready for the next one
+        self.assertEqual([i.title for i in page._ideas], ["Podcast about habits", "Learn to solder",
+                                                          "Rewrite the landing page"])
+        self.assertEqual(len(page._rows()), 3)
+        self.assertIn("3 ideas", page.summary.get_text())
+        self.assertEqual(self.window.stack.get_page(page).get_title(), "Ideas")
+
+        dialog = IdeaDialog(self.window, self.ctx, page._ideas[2])  # more detail only when there is time
+        dialog.title_row.set_text("Rewrite the landing page copy")
+        dialog.text.get_buffer().set_text("Start with the headline.")
+        self.assertTrue(dialog.save())
+        dialog.destroy()
+        self.assertEqual(page._ideas[2].title, "Rewrite the landing page copy")
+        self.assertEqual(page._ideas[2].note, "Start with the headline.")
+
+    def test_dragging_an_idea_changes_the_order_and_the_numbers(self):
+        from fuzzy_journey.ui.pages.ideas import DRAG_PREFIX
+
+        self.addCleanup(self._clear_ideas)
+        page = self.window.pages["ideas"]
+        for text in ("a", "b", "c"):
+            page.entry.set_text(text)
+            page._capture()
+        a, b, c = page._ideas
+        self.window.show_page("ideas")
+        self.window.present()
+        for _ in range(20):  # let the rows get a real size, so "top half" and "bottom half" mean something
+            self._flush()
+        rows = page._rows()
+        height = rows[0].get_height()
+        self.assertGreater(height, 10)
+        # c is dragged onto the top half of a: c becomes the first thing to follow up
+        self.assertTrue(page._drop(None, f"{DRAG_PREFIX}{c.id}", 5, 0, rows[0], a))
+        self._flush()
+        self.assertEqual([i.title for i in page._ideas], ["c", "a", "b"])
+        self.assertEqual([r.get_title() for r in page._rows()], ["c", "a", "b"])
+        # a is dragged onto the lower half of b: a goes last
+        rows = page._rows()  # far below the middle of the row, whatever its size: the lower half
+        self.assertTrue(page._drop(None, f"{DRAG_PREFIX}{a.id}", 5, 10_000, rows[2], b))
+        self._flush()
+        self.assertEqual([i.title for i in page.ctx.db.list_ideas()], ["c", "b", "a"])
+        # anything that is not one of our ideas is ignored
+        self.assertFalse(page._drop(None, "some other text", 5, 0, page._rows()[0], page._ideas[0]))
+        self.assertFalse(page._drop(None, f"{DRAG_PREFIX}oops", 5, 0, page._rows()[0], page._ideas[0]))
+        self.assertEqual([i.title for i in page.ctx.db.list_ideas()], ["c", "b", "a"])
+
+    def test_every_idea_row_can_be_dragged_and_dropped_on(self):
+        from fuzzy_journey.ui.gi_setup import Gtk
+
+        self.addCleanup(self._clear_ideas)
+        page = self.window.pages["ideas"]
+        page.entry.set_text("x")
+        page._capture()
+        (row,) = page._rows()
+        self.assertTrue(any(isinstance(c, Gtk.DropTarget) for c in row.observe_controllers()))
+        sources = []
+
+        def walk(widget):
+            child = widget.get_first_child()
+            while child:
+                sources.extend(c for c in child.observe_controllers() if isinstance(c, Gtk.DragSource))
+                walk(child)
+                child = child.get_next_sibling()
+
+        walk(row)
+        self.assertEqual(len(sources), 1)  # the handle starts the drag, so tapping the row still edits it
+
+    def test_the_first_idea_is_marked_and_the_drop_line_clears(self):
+        self.addCleanup(self._clear_ideas)
+        page = self.window.pages["ideas"]
+        for text in ("one", "two"):
+            page.entry.set_text(text)
+            page._capture()
+        first, second = page._rows()
+        page._mark(second, after=True)
+        self.assertTrue(second.has_css_class("fj-drop-after"))
+        page._mark(first, after=False)  # moving to another row moves the line
+        self.assertFalse(second.has_css_class("fj-drop-after"))
+        self.assertTrue(first.has_css_class("fj-drop-before"))
+        page._finish_drag()
+        self.assertFalse(first.has_css_class("fj-drop-before"))
+
+    def test_ctrl_i_jumps_to_the_idea_bank(self):
+        self.window.show_page("today")
+        self.window.capture_idea()
+        self.assertEqual(self.window.stack.get_visible_child_name(), "ideas")
+        self.assertIn("app.capture-idea", self.app.get_actions_for_accel("<Control>i"))
 
 
     def test_closing_hides_into_the_tray_only_while_a_tray_really_exists(self):
