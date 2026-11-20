@@ -17,6 +17,7 @@ from pathlib import Path
 from . import selftest
 from .habits import MAX_HABITS, Habit, check_habit
 from .habits import clamp as clamp_habit
+from .ideas import MAX_IDEAS, Idea, check_idea, reordered
 from .models import (
     PROGRESS_UNITS,
     SOUND_PRESETS,
@@ -39,7 +40,7 @@ from .selftest import DEFAULT_HOURS, HOURS_RANGE, MODE_OFF, MODES
 from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def _now_iso() -> str:
@@ -312,10 +313,26 @@ def _migrate_to_v10(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_to_v11(conn: sqlite3.Connection) -> None:
+    """The Idea Bank: quick-capture ideas in an order you set. Everyone starts with none."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ideas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            note TEXT NOT NULL DEFAULT '',
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+
+
 #: Append new migrations here; never edit an old one.
 MIGRATIONS = (
     _migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6, _migrate_to_v7,
-    _migrate_to_v8, _migrate_to_v9, _migrate_to_v10,
+    _migrate_to_v8, _migrate_to_v9, _migrate_to_v10, _migrate_to_v11,
 )
 
 
@@ -686,6 +703,72 @@ class Database:
                        ON CONFLICT(habit_id, day_date) DO UPDATE SET count=excluded.count""",
                     (habit_id, day.isoformat(), count),
                 )
+
+    # -- idea bank ---------------------------------------------------------
+
+    def list_ideas(self) -> list[Idea]:
+        """Every idea, the one to follow up first at the top."""
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM ideas ORDER BY position, id").fetchall()
+        return [Idea(r["title"], r["note"], id=r["id"], position=r["position"]) for r in rows]
+
+    def save_idea(self, idea: Idea) -> int:
+        """Add an idea (at the bottom of the order) or change its text. Its place in the order is kept."""
+        problem = check_idea(idea.title, idea.note)
+        if problem:
+            raise ValueError(problem)
+        now = _now_iso()
+        title, note = " ".join(idea.title.split()), idea.note.strip()
+        with self.transaction(immediate=True) as conn:
+            if idea.id is None:
+                count, last = conn.execute("SELECT COUNT(*), COALESCE(MAX(position), -1) FROM ideas").fetchone()
+                if count >= MAX_IDEAS:
+                    raise ValueError(f"The Idea Bank is full ({MAX_IDEAS}). Delete some ideas first.")
+                cursor = conn.execute(
+                    "INSERT INTO ideas(title, note, position, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                    (title, note, last + 1, now, now),
+                )
+                idea.id, idea.position = int(cursor.lastrowid), last + 1
+            else:
+                conn.execute("UPDATE ideas SET title=?, note=?, updated_at=? WHERE id=?", (title, note, now, idea.id))
+        idea.title, idea.note = title, note
+        return idea.id
+
+    def delete_idea(self, idea_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM ideas WHERE id=?", (idea_id,))
+
+    def _write_idea_order(self, conn: sqlite3.Connection, ids: list[int]) -> None:
+        conn.executemany("UPDATE ideas SET position=? WHERE id=?", [(i, iid) for i, iid in enumerate(ids)])
+
+    def move_idea(self, idea: Idea, direction: int) -> bool:
+        """Move an idea up (-1) or down (+1) one place. False when it is already at that end."""
+        if idea.id is None:
+            return False
+        with self.transaction(immediate=True) as conn:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM ideas ORDER BY position, id")]
+            if idea.id not in ids:
+                return False
+            at = ids.index(idea.id)
+            to = at + direction
+            if not 0 <= to < len(ids):
+                return False
+            ids[at], ids[to] = ids[to], ids[at]
+            self._write_idea_order(conn, ids)
+        return True
+
+    def drop_idea(self, moving: int, target: int, after: bool) -> bool:
+        """Drag-and-drop: put idea ``moving`` just before (or, with ``after``, just after) idea ``target``.
+
+        False when nothing changed (dropped on itself, back where it was, or an idea that no longer exists).
+        """
+        with self.transaction(immediate=True) as conn:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM ideas ORDER BY position, id")]
+            new = reordered(ids, moving, target, after)
+            if new == ids:
+                return False
+            self._write_idea_order(conn, new)
+        return True
 
     # -- prayer alarms -----------------------------------------------------
 

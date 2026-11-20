@@ -87,12 +87,14 @@ class MainWindow(Adw.ApplicationWindow):
         ("recovery", "Recovery", "document-revert-symbolic"),
         ("recall", "Recall", "dialog-question-symbolic"),
         ("habits", "Habits", "view-grid-symbolic"),
+        ("ideas", "Ideas", "starred-symbolic"),
     )
 
     def _build_pages(self) -> None:
         from .pages.alarms import AlarmsPage
         from .pages.bank import BankPage
         from .pages.habits import HabitsPage
+        from .pages.ideas import IdeasPage
         from .pages.prayers import PrayersPage
         from .pages.recall import RecallPage
         from .pages.recovery import RecoveryPage
@@ -103,7 +105,7 @@ class MainWindow(Adw.ApplicationWindow):
 
         factories = {"today": TodayPage, "tomorrow": TomorrowPage, "routine": RoutinePage, "bank": BankPage,
                      "alarms": AlarmsPage, "prayers": PrayersPage, "rules": RulesPage, "recovery": RecoveryPage,
-                     "recall": RecallPage, "habits": HabitsPage}
+                     "recall": RecallPage, "habits": HabitsPage, "ideas": IdeasPage}
         for name, title, icon in self.PAGES:
             page = factories[name](self.ctx)
             self.pages[name] = page
@@ -123,6 +125,11 @@ class MainWindow(Adw.ApplicationWindow):
 
     def show_page(self, name: str) -> None:
         self.stack.set_visible_child_name(name)
+
+    def capture_idea(self) -> None:
+        """Jump to the Idea Bank with the cursor in the quick-add line (Ctrl+I)."""
+        self.show_page("ideas")
+        self.pages["ideas"].focus_entry()
 
     def _welcome(self) -> bool:
         from .dialogs.philosophy import PhilosophyDialog

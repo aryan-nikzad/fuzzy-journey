@@ -26,6 +26,7 @@ class Application(Adw.Application):
         self._add_action("philosophy", self._philosophy, "F1")
         self._add_action("settle-today", lambda *_: self.window and self.window.settle_day(clock_now().date()))
         self._add_action("settle-earlier", lambda *_: self.window and self.window.review_tasks())
+        self._add_action("capture-idea", lambda *_: self.window and self.window.capture_idea(), "<Ctrl>i")
         self._add_action("about", self._about)
         self._add_action("quit", lambda *_: self.quit(), "<Ctrl>q")
         self._add_action("stop-alarm", lambda *_: self.window and self.window.stop_alarm(), "<Ctrl>period")

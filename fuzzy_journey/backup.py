@@ -6,7 +6,7 @@ A backup is one zip file:
     What it is: the app, its version, the schema it was made with, and when.
 ``database.sqlite3``
     A consistent snapshot of the whole database: settings, reminders, routine, tasks, days, the habit
-    calendar, rules, the recovery plan, the bank, pomodoro state.
+    calendar, ideas, rules, the recovery plan, the bank, pomodoro state.
 ``custom-sounds/<file>``
     Every personal sound a reminder, the routine, a prayer or the pomodoro uses, so they come back too.
 

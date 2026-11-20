@@ -213,7 +213,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         safe = Adw.PreferencesGroup(
             title="Backup and restore",
             description="Everything you have set up in one file: settings, reminders, routine, tasks, days, "
-                        "habits, rules, the recovery plan and your own sounds. The prayer-time CSV files are not "
+                        "habits, ideas, rules, the recovery plan and your own sounds. The prayer-time CSV files are not "
                         "included; they work on their own wherever you place them.",
         )
         back_up = Adw.ActionRow(title="Back up everything…", subtitle="Save it to a file you keep safe.",
@@ -388,7 +388,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         confirm(
             self, "Replace everything with this backup?",
             f"Made on {info.created_text} by version {info.app_version}. Everything the app stores now "
-            "(settings, reminders, routine, tasks, days, habits and rules) is replaced by what is in the backup. "
+            "(settings, reminders, routine, tasks, days, habits, ideas and rules) is replaced by what is in the backup. "
             "A copy of the current data is kept first. The prayer-time CSV files are not touched.",
             "Restore", lambda: self.restore_backup(path),
         )
