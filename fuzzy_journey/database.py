@@ -15,7 +15,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from . import selftest
-from .habits import KEYS as HABIT_KEYS
+from .habits import MAX_HABITS, Habit, check_habit
 from .habits import clamp as clamp_habit
 from .models import (
     PROGRESS_UNITS,
@@ -38,9 +38,8 @@ from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
 from .selftest import DEFAULT_HOURS, HOURS_RANGE, MODE_OFF, MODES
 from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
-from .timeutil import now as clock_now
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def _now_iso() -> str:
@@ -271,10 +270,52 @@ def _migrate_to_v9(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v10(conn: sqlite3.Connection) -> None:
+    """Habits you choose yourself, each with its own marks. Anyone who already used the two-habit calendar
+    keeps both habits, their start dates and every marked day; everyone else starts with none."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS habits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            kind TEXT NOT NULL DEFAULT 'quit',
+            start_date TEXT NOT NULL,
+            position INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS habit_marks (
+            habit_id INTEGER NOT NULL REFERENCES habits(id) ON DELETE CASCADE,
+            day_date TEXT NOT NULL,
+            count INTEGER NOT NULL,
+            PRIMARY KEY (habit_id, day_date)
+        );
+        """
+    )
+    if conn.execute("SELECT 1 FROM habits").fetchone():
+        return  # already carried over (another process migrated first)
+    used = conn.execute("SELECT 1 FROM habit_days LIMIT 1").fetchone() or conn.execute(
+        "SELECT 1 FROM app_settings WHERE setting_key LIKE 'habit_start_%' LIMIT 1").fetchone()
+    if not used:
+        return
+    today, now = date.today().isoformat(), _now_iso()
+    for position, (column, name) in enumerate((("masturbation", "Masturbation"), ("porn", "Porn"))):
+        row = conn.execute("SELECT setting_value FROM app_settings WHERE setting_key=?",
+                           (f"habit_start_{column}",)).fetchone()
+        cursor = conn.execute(
+            "INSERT INTO habits(name, kind, start_date, position, created_at) VALUES (?, 'quit', ?, ?, ?)",
+            (name, row[0] if row and row[0] else today, position, now),
+        )
+        conn.execute(
+            f"INSERT INTO habit_marks(habit_id, day_date, count) "
+            f"SELECT ?, day_date, {column} FROM habit_days WHERE {column} > 0",
+            (cursor.lastrowid,),
+        )
+
+
 #: Append new migrations here; never edit an old one.
 MIGRATIONS = (
     _migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6, _migrate_to_v7,
-    _migrate_to_v8, _migrate_to_v9,
+    _migrate_to_v8, _migrate_to_v9, _migrate_to_v10,
 )
 
 
@@ -562,28 +603,89 @@ class Database:
 
     # -- habit calendar ----------------------------------------------------
 
-    def habit_counts(self, start: date, end: date) -> dict[date, dict[str, int]]:
-        """Per day with any mark: how many times each habit happened."""
+    def list_habits(self) -> list[Habit]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM habits ORDER BY position, id").fetchall()
+        return [Habit(r["name"], r["kind"], date.fromisoformat(r["start_date"]), r["id"], r["position"])
+                for r in rows]
+
+    def save_habit(self, habit: Habit) -> int:
+        """Add a habit, or change its name, kind or start date. Its marked days are never touched."""
+        problem = check_habit(habit.name, habit.kind)
+        if problem:
+            raise ValueError(problem)
+        name = habit.name.strip()
+        with self.transaction(immediate=True) as conn:
+            if habit.id is None:
+                count, last = conn.execute("SELECT COUNT(*), COALESCE(MAX(position), -1) FROM habits").fetchone()
+                if count >= MAX_HABITS:
+                    raise ValueError(f"That is the most habits you can track ({MAX_HABITS}).")
+                cursor = conn.execute(
+                    "INSERT INTO habits(name, kind, start_date, position, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (name, habit.kind, habit.start.isoformat(), last + 1, _now_iso()),
+                )
+                habit.id, habit.position = int(cursor.lastrowid), last + 1
+            else:
+                conn.execute("UPDATE habits SET name=?, kind=?, start_date=? WHERE id=?",
+                             (name, habit.kind, habit.start.isoformat(), habit.id))
+        habit.name = name
+        return habit.id
+
+    def delete_habit(self, habit_id: int) -> None:
+        """Remove a habit and every day marked for it."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM habit_marks WHERE habit_id=?", (habit_id,))
+            conn.execute("DELETE FROM habits WHERE id=?", (habit_id,))
+
+    def move_habit(self, habit: Habit, direction: int) -> bool:
+        """Move a habit up (-1) or down (+1) in the list. False when it is already at that end."""
+        if habit.id is None:
+            return False
+        with self.transaction(immediate=True) as conn:
+            ids = [r["id"] for r in conn.execute("SELECT id FROM habits ORDER BY position, id")]
+            if habit.id not in ids:
+                return False
+            at = ids.index(habit.id)
+            to = at + direction
+            if not 0 <= to < len(ids):
+                return False
+            ids[at], ids[to] = ids[to], ids[at]
+            conn.executemany("UPDATE habits SET position=? WHERE id=?", [(i, hid) for i, hid in enumerate(ids)])
+        return True
+
+    def habit_marks(self, start: date, end: date) -> dict[date, dict[int, int]]:
+        """Per marked day: how many times each habit (by id) happened."""
         with self.connection() as conn:
             rows = conn.execute(
-                "SELECT * FROM habit_days WHERE day_date BETWEEN ? AND ? ORDER BY day_date",
+                "SELECT habit_id, day_date, count FROM habit_marks WHERE day_date BETWEEN ? AND ?",
                 (start.isoformat(), end.isoformat()),
             ).fetchall()
-        return {date.fromisoformat(r["day_date"]): {key: int(r[key]) for key in HABIT_KEYS} for r in rows}
+        out: dict[date, dict[int, int]] = {}
+        for row in rows:
+            out.setdefault(date.fromisoformat(row["day_date"]), {})[row["habit_id"]] = int(row["count"])
+        return out
 
-    def set_habit_day(self, day: date, counts: dict[str, int]) -> None:
-        """Save a day's counts. A day where nothing happened keeps no row."""
-        values = {key: clamp_habit(counts.get(key, 0)) for key in HABIT_KEYS}
+    def habit_counts(self, habit_id: int, start: date, end: date) -> dict[date, int]:
+        """One habit's marked days between two dates."""
+        with self.connection() as conn:
+            rows = conn.execute(
+                "SELECT day_date, count FROM habit_marks WHERE habit_id=? AND day_date BETWEEN ? AND ?",
+                (habit_id, start.isoformat(), end.isoformat()),
+            ).fetchall()
+        return {date.fromisoformat(r["day_date"]): int(r["count"]) for r in rows}
+
+    def set_habit_mark(self, habit_id: int, day: date, count: int) -> None:
+        """Mark how many times a habit happened on a day. Zero clears the day."""
+        count = clamp_habit(count)
         with self.transaction() as conn:
-            if not any(values.values()):
-                conn.execute("DELETE FROM habit_days WHERE day_date=?", (day.isoformat(),))
-                return
-            conn.execute(
-                """INSERT INTO habit_days(day_date, masturbation, porn, updated_at) VALUES (?, ?, ?, ?)
-                   ON CONFLICT(day_date) DO UPDATE SET masturbation=excluded.masturbation,
-                       porn=excluded.porn, updated_at=excluded.updated_at""",
-                (day.isoformat(), values["masturbation"], values["porn"], _now_iso()),
-            )
+            if count == 0:
+                conn.execute("DELETE FROM habit_marks WHERE habit_id=? AND day_date=?", (habit_id, day.isoformat()))
+            else:
+                conn.execute(
+                    """INSERT INTO habit_marks(habit_id, day_date, count) VALUES (?, ?, ?)
+                       ON CONFLICT(habit_id, day_date) DO UPDATE SET count=excluded.count""",
+                    (habit_id, day.isoformat(), count),
+                )
 
     # -- prayer alarms -----------------------------------------------------
 
@@ -1233,18 +1335,6 @@ class Settings:
     @habit_calendar.setter
     def habit_calendar(self, value: bool) -> None:
         self.set("habit_calendar", "1" if value else "0")
-
-    def habit_start(self, key: str) -> date:
-        """The day a habit's figures start counting. The first time it is asked it becomes today."""
-        try:
-            return date.fromisoformat(self.get(f"habit_start_{key}", ""))
-        except ValueError:
-            today = clock_now().date()
-            self.set(f"habit_start_{key}", today.isoformat())
-            return today
-
-    def set_habit_start(self, key: str, value: date) -> None:
-        self.set(f"habit_start_{key}", value.isoformat())
 
     @property
     def tray_icon(self) -> bool:
