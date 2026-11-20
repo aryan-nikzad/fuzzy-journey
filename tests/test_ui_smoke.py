@@ -279,45 +279,131 @@ class UiSmokeTests(unittest.TestCase):
             conn.execute("DELETE FROM tasks WHERE kind='selftest'")
 
 
-    def test_the_habit_calendar_records_each_habit_on_its_own(self):
+    def _habit(self, name, kind, start=None):
         from datetime import date
 
+        from fuzzy_journey.habits import Habit
+
+        habit = Habit(name, kind, start or date(2026, 11, 2))
+        self.ctx.db.save_habit(habit)
+        self.addCleanup(self._remove_habit, habit)
+        return habit
+
+    def _remove_habit(self, habit):
+        self.ctx.db.delete_habit(habit.id)
+        self.ctx.changed("habits")
+
+    def test_the_habit_page_starts_empty_and_shows_what_you_add(self):
+        from fuzzy_journey.habits import BUILD, QUIT
+
         page = self.window.pages["habits"]
+        self.assertEqual(page._habits, [])
+        self.assertFalse(page.calendar_card.get_visible())  # nothing to mark yet
+        self._habit("Reading", BUILD)
+        self._habit("Smoking", QUIT)
+        self.ctx.changed("habits")
+        self.assertEqual([h.name for h in page._habits], ["Reading", "Smoking"])
+        self.assertTrue(page.calendar_card.get_visible())
+        shown = self._texts(page.stats)
+        self.assertIn("Last 7 days", shown)
+        self.assertEqual(len(page._inputs), 2)
+
+    def test_each_habit_is_marked_on_its_own_with_a_count(self):
+        from datetime import date
+
+        from fuzzy_journey.habits import BUILD, QUIT
+
+        page = self.window.pages["habits"]
+        reading, smoking = self._habit("Reading", BUILD), self._habit("Smoking", QUIT)
+        self.ctx.changed("habits")
         today = date(2026, 11, 2)
-        self.assertEqual(page.selected, today)
-        self.assertFalse(any(s.get_sensitive() for s in page.spins.values()))  # nothing happened yet
+        marks = lambda: self.ctx.db.habit_marks(today, today).get(today, {})  # noqa: E731
 
-        page.checks["masturbation"].set_active(True)  # one habit only
-        self.assertEqual(self.ctx.db.habit_counts(today, today)[today], {"masturbation": 1, "porn": 0})
-        page.spins["masturbation"].set_value(3)
-        page.checks["porn"].set_active(True)
-        self.assertEqual(self.ctx.db.habit_counts(today, today)[today], {"masturbation": 3, "porn": 1})
-        self.assertTrue(page.spins["masturbation"].get_sensitive())
+        page._inputs[reading.id][0].set_active(True)
+        self.assertEqual(marks(), {reading.id: 1})
+        page._inputs[reading.id][1].set_value(3)
+        page._inputs[smoking.id][0].set_active(True)
+        self.assertEqual(marks(), {reading.id: 3, smoking.id: 1})
+        page._inputs[reading.id][0].set_active(False)
+        self.assertEqual(marks(), {smoking.id: 1})
+        page._inputs[smoking.id][0].set_active(False)
+        self.assertEqual(marks(), {})
 
-        page.checks["masturbation"].set_active(False)
-        self.assertEqual(self.ctx.db.habit_counts(today, today)[today], {"masturbation": 0, "porn": 1})
-        page.checks["porn"].set_active(False)
-        self.assertEqual(self.ctx.db.habit_counts(today, today), {})
-
-    def test_habit_figures_wait_for_the_days_to_pass_and_a_new_start_date_keeps_marks(self):
+    def test_the_calendar_tints_good_bad_and_mixed_days(self):
         from datetime import date, timedelta
 
+        from fuzzy_journey.habits import BUILD, QUIT
+
+        page = self.window.pages["habits"]
+        reading, smoking = self._habit("Reading", BUILD), self._habit("Smoking", QUIT)
+        self.ctx.changed("habits")
+        today = date(2026, 11, 2)
+        self.ctx.db.set_habit_mark(reading.id, today - timedelta(days=0), 1)
+        self.ctx.db.set_habit_mark(smoking.id, today, 1)
+        page.month = today.replace(day=1)
+        page._render_month()
+        classes = {}
+        child = page.grid.get_first_child()
+        while child:
+            if isinstance(child, Gtk.Button):
+                classes[child.get_label()] = set(child.get_css_classes())
+            child = child.get_next_sibling()
+        self.assertIn("fj-day-mixed", classes["2"])
+        self.ctx.db.set_habit_mark(smoking.id, today, 0)
+        page._render_month()
+        child, found = page.grid.get_first_child(), None
+        while child:
+            if isinstance(child, Gtk.Button) and child.get_label() == "2":
+                found = set(child.get_css_classes())
+            child = child.get_next_sibling()
+        self.assertIn("fj-day-good", found)
+
+    def test_figures_wait_for_the_days_to_pass_and_speak_the_right_words(self):
+        from datetime import date, timedelta
+
+        from fuzzy_journey.habits import BUILD, QUIT
+
         page = self.window.pages["habits"]
         today = date(2026, 11, 2)
-        for key in ("masturbation", "porn"):
-            self.ctx.settings.set_habit_start(key, today - timedelta(days=3))
+        reading = self._habit("Reading", BUILD, today - timedelta(days=3))
+        smoking = self._habit("Smoking", QUIT, today - timedelta(days=10))
+        self.ctx.db.set_habit_mark(reading.id, today - timedelta(days=2), 2)
+        self.ctx.db.set_habit_mark(smoking.id, today - timedelta(days=2), 2)
         self.ctx.changed("habits")
-        self.assertIn("4 more days", page.groups["porn"]["week"].get_subtitle())
-        self.assertIn("27 more days", page.groups["porn"]["month"].get_subtitle())
+        self.assertIn("4 more days", page._figures[reading.id]["week"].get_subtitle())
+        self.assertIn("27 more days", page._figures[reading.id]["month"].get_subtitle())
+        week = page._figures[smoking.id]["week"].get_subtitle()  # ten days have passed: it has a weekly figure
+        self.assertIn("happened on 1 of 7 days", week)
+        self.assertIn("6 without", week)
+        self.assertIn("done on 1 of 3 days", page._figures[reading.id]["all"].get_subtitle())
+        self.assertIn("2 missed", page._figures[reading.id]["all"].get_subtitle())
 
-        self.ctx.db.set_habit_day(today - timedelta(days=2), {"porn": 2})
-        self.ctx.settings.set_habit_start("porn", today - timedelta(days=10))
-        self.ctx.changed("habits")
-        self.assertIn("2 time", page.groups["porn"]["week"].get_subtitle())
-        self.assertIn("4 more days", page.groups["masturbation"]["week"].get_subtitle())  # its own start
-        self.ctx.settings.set_habit_start("porn", today - timedelta(days=1))  # moving later wipes nothing
-        self.assertEqual(self.ctx.db.habit_counts(today - timedelta(days=2), today)[today - timedelta(days=2)]["porn"], 2)
-        self.ctx.db.set_habit_day(today - timedelta(days=2), {})
+    def test_the_habit_dialog_adds_edits_reorders_and_deletes(self):
+        from datetime import date
+
+        from fuzzy_journey.habits import BUILD, KINDS, QUIT
+        from fuzzy_journey.ui.dialogs.habit_dialog import HabitDialog
+
+        dialog = HabitDialog(self.window, self.ctx)
+        dialog.name_row.set_text("   ")
+        self.assertFalse(dialog.save())  # a habit needs a name
+        dialog._suggest("Exercise", BUILD)  # an idea fills the name and the kind
+        self.assertEqual(KINDS[dialog.kind_row.get_selected()], BUILD)
+        self.assertTrue(dialog.save())
+        dialog.destroy()
+        (habit,) = self.ctx.db.list_habits()
+        self.addCleanup(self._remove_habit, habit)
+        self.assertEqual((habit.name, habit.kind), ("Exercise", BUILD))
+        self.assertEqual(self.window.pages["habits"]._habits[0].name, "Exercise")
+
+        edit = HabitDialog(self.window, self.ctx, habit)
+        edit.name_row.set_text("Gym")
+        edit.kind_row.set_selected(KINDS.index(QUIT))
+        edit.start.date = date(2026, 10, 20)
+        self.assertTrue(edit.save())
+        edit.destroy()
+        (habit,) = self.ctx.db.list_habits()
+        self.assertEqual((habit.name, habit.kind, habit.start), ("Gym", QUIT, date(2026, 10, 20)))
 
     def test_the_habit_page_can_be_hidden_and_shown_again(self):
         stack_page = self.window.stack.get_page(self.window.pages["habits"])

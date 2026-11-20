@@ -5,7 +5,22 @@ from __future__ import annotations
 import unittest
 from datetime import date, timedelta
 
-from fuzzy_journey.habits import HabitStat, clamp, days_left, days_passed, since_start, window_stat
+from fuzzy_journey.database import Database
+from fuzzy_journey.habits import (
+    BUILD,
+    MAX_HABITS,
+    MAX_NAME,
+    QUIT,
+    Habit,
+    HabitStat,
+    check_habit,
+    clamp,
+    days_left,
+    days_passed,
+    describe,
+    since_start,
+    window_stat,
+)
 
 from .helpers import DbTestCase
 
@@ -58,37 +73,126 @@ class StatTests(unittest.TestCase):
         self.assertEqual(clamp(500), 99)
 
 
+class WordingTests(unittest.TestCase):
+    def test_a_quit_habit_speaks_of_days_without_and_a_build_habit_of_days_missed(self):
+        stat = HabitStat(7, 6, 5)
+        self.assertEqual(describe(stat, 0, QUIT), "0.86 a day · 6 times · happened on 5 of 7 days · 2 without")
+        self.assertEqual(describe(stat, 0, BUILD), "0.86 a day · 6 times · done on 5 of 7 days · 2 missed")
+
+    def test_a_figure_that_is_not_ready_says_how_long_to_wait(self):
+        self.assertEqual(describe(None, 1, QUIT), "Shown after 1 more day have passed.")
+        self.assertEqual(describe(None, 4, BUILD), "Shown after 4 more days have passed.")
+
+    def test_checking_a_habit(self):
+        self.assertIsNone(check_habit("Reading", BUILD))
+        self.assertIsNotNone(check_habit("  ", BUILD))
+        self.assertIsNotNone(check_habit("x" * (MAX_NAME + 1), QUIT))
+        self.assertIsNotNone(check_habit("Reading", "maybe"))
+
+
 class StorageTests(DbTestCase):
-    def test_a_day_is_saved_per_habit_and_cleared_when_nothing_happened(self):
-        day = date(2026, 11, 2)
-        self.db.set_habit_day(day, {"masturbation": 2, "porn": 0})
-        self.assertEqual(self.db.habit_counts(day, day), {day: {"masturbation": 2, "porn": 0}})
-        self.db.set_habit_day(day, {"masturbation": 0, "porn": 1})
-        self.assertEqual(self.db.habit_counts(day, day)[day], {"masturbation": 0, "porn": 1})
-        self.db.set_habit_day(day, {})
-        self.assertEqual(self.db.habit_counts(day, day), {})
+    def habit(self, name="Reading", kind=BUILD, start=START):
+        habit = Habit(name, kind, start)
+        self.db.save_habit(habit)
+        return habit
 
-    def test_changing_a_start_date_keeps_every_day(self):
-        day = date(2026, 11, 2)
-        self.db.set_habit_day(day, {"porn": 3})
-        self.db.settings.set_habit_start("porn", date(2026, 11, 20))
-        self.assertEqual(self.db.habit_counts(day, day)[day]["porn"], 3)
+    def test_a_new_install_has_no_habits(self):
+        self.assertEqual(self.db.list_habits(), [])
 
-    def test_each_habit_has_its_own_start_and_the_first_one_is_remembered(self):
-        s = self.db.settings
-        first = s.habit_start("porn")
-        self.assertEqual(s.habit_start("porn"), first)  # not a moving target
-        s.set_habit_start("masturbation", date(2026, 1, 1))
-        self.assertEqual(s.habit_start("masturbation"), date(2026, 1, 1))
-        self.assertEqual(s.habit_start("porn"), first)
+    def test_habits_can_be_added_renamed_and_keep_their_order(self):
+        a, b = self.habit("Reading"), self.habit("Smoking", QUIT)
+        self.assertEqual([h.name for h in self.db.list_habits()], ["Reading", "Smoking"])
+        b.name, b.kind = "  Cigarettes ", QUIT
+        self.db.save_habit(b)
+        listed = self.db.list_habits()
+        self.assertEqual([(h.id, h.name, h.kind) for h in listed], [(a.id, "Reading", BUILD), (b.id, "Cigarettes", QUIT)])
+
+    def test_each_habit_has_its_own_marks_and_start(self):
+        a = self.habit("Reading", BUILD, date(2026, 10, 1))
+        b = self.habit("Smoking", QUIT, date(2026, 11, 1))
+        day = date(2026, 11, 2)
+        self.db.set_habit_mark(a.id, day, 3)
+        self.db.set_habit_mark(b.id, day, 1)
+        self.assertEqual(self.db.habit_marks(day, day)[day], {a.id: 3, b.id: 1})
+        self.assertEqual(self.db.habit_counts(a.id, day, day), {day: 3})
+        self.db.set_habit_mark(a.id, day, 0)
+        self.assertEqual(self.db.habit_marks(day, day)[day], {b.id: 1})
+        self.db.set_habit_mark(b.id, day, 0)
+        self.assertEqual(self.db.habit_marks(day, day), {})
+        self.assertEqual([h.start for h in self.db.list_habits()], [date(2026, 10, 1), date(2026, 11, 1)])
+
+    def test_changing_a_start_date_keeps_every_marked_day(self):
+        habit = self.habit()
+        day = date(2026, 11, 2)
+        self.db.set_habit_mark(habit.id, day, 2)
+        habit.start = date(2026, 11, 20)
+        self.db.save_habit(habit)
+        self.assertEqual(self.db.habit_counts(habit.id, day, day), {day: 2})
+
+    def test_deleting_a_habit_removes_its_marks_and_only_its_marks(self):
+        a, b = self.habit("Reading"), self.habit("Walking")
+        day = date(2026, 11, 2)
+        self.db.set_habit_mark(a.id, day, 1)
+        self.db.set_habit_mark(b.id, day, 1)
+        self.db.delete_habit(a.id)
+        self.assertEqual([h.name for h in self.db.list_habits()], ["Walking"])
+        self.assertEqual(self.db.habit_marks(day, day)[day], {b.id: 1})
+
+    def test_moving_changes_the_order_and_stops_at_the_ends(self):
+        a, _b, c = self.habit("A"), self.habit("B"), self.habit("C")
+        self.assertFalse(self.db.move_habit(a, -1))
+        self.assertFalse(self.db.move_habit(c, 1))
+        self.assertTrue(self.db.move_habit(c, -1))
+        self.assertEqual([h.name for h in self.db.list_habits()], ["A", "C", "B"])
+
+    def test_an_invalid_habit_is_refused_and_so_is_a_crowd(self):
+        with self.assertRaises(ValueError):
+            self.db.save_habit(Habit("", QUIT, START))
+        for n in range(MAX_HABITS):
+            self.habit(f"H{n}")
+        with self.assertRaisesRegex(ValueError, "most habits"):
+            self.habit("one too many")
+
+    def test_marks_are_clamped(self):
+        habit = self.habit()
+        self.db.set_habit_mark(habit.id, START, 500)
+        self.assertEqual(self.db.habit_counts(habit.id, START, START)[START], 99)
 
     def test_the_calendar_can_be_turned_off_without_losing_data(self):
-        day = date(2026, 11, 2)
-        self.db.set_habit_day(day, {"porn": 1})
+        habit = self.habit()
+        self.db.set_habit_mark(habit.id, START, 1)
         self.assertTrue(self.db.settings.habit_calendar)
         self.db.settings.habit_calendar = False
         self.assertFalse(self.db.settings.habit_calendar)
-        self.assertEqual(self.db.habit_counts(day, day)[day]["porn"], 1)
+        self.assertEqual(self.db.habit_counts(habit.id, START, START), {START: 1})
+
+
+class UpgradeTests(DbTestCase):
+    def test_the_old_two_habit_calendar_becomes_two_habits_with_every_day(self):
+        with self.db.connection() as conn:  # roll back to a version-9 file that was in use
+            conn.execute("DROP TABLE habit_marks")
+            conn.execute("DROP TABLE habits")
+            conn.execute("PRAGMA user_version = 9")
+            conn.execute("INSERT INTO habit_days VALUES ('2026-11-02', 2, 1, 'x')")
+            conn.execute("INSERT INTO habit_days VALUES ('2026-11-03', 0, 3, 'x')")
+            conn.execute("INSERT INTO app_settings(setting_key, setting_value) VALUES ('habit_start_porn', '2026-10-01')")
+        db = Database(self.db.path)
+        habits = {h.name: h for h in db.list_habits()}
+        self.assertEqual(list(habits), ["Masturbation", "Porn"])
+        self.assertTrue(all(h.kind == QUIT for h in habits.values()))
+        self.assertEqual(habits["Porn"].start, date(2026, 10, 1))
+        both = date(2026, 11, 1), date(2026, 11, 30)
+        self.assertEqual(db.habit_counts(habits["Masturbation"].id, *both), {date(2026, 11, 2): 2})
+        self.assertEqual(db.habit_counts(habits["Porn"].id, *both), {date(2026, 11, 2): 1, date(2026, 11, 3): 3})
+        again = Database(self.db.path)  # opening it again must not carry things over twice
+        self.assertEqual(len(again.list_habits()), 2)
+
+    def test_someone_who_never_used_it_starts_with_none(self):
+        with self.db.connection() as conn:
+            conn.execute("DROP TABLE habit_marks")
+            conn.execute("DROP TABLE habits")
+            conn.execute("PRAGMA user_version = 9")
+        self.assertEqual(Database(self.db.path).list_habits(), [])
 
 
 if __name__ == "__main__":

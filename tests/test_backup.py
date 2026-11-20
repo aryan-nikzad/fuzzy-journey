@@ -12,6 +12,7 @@ from pathlib import Path
 from fuzzy_journey import backup
 from fuzzy_journey.backup import BackupError, create_backup, read_backup_info, restore_backup
 from fuzzy_journey.database import SCHEMA_VERSION, Database
+from fuzzy_journey.habits import BUILD, Habit
 from fuzzy_journey.models import Alarm, Sound, Task
 from fuzzy_journey.principles import Principle
 from fuzzy_journey.rhythm import DayKind
@@ -39,10 +40,11 @@ class BackupTestCase(DbTestCase):
         db.settings.theme = "dark"
         db.settings.tray_icon = True
         db.settings.selftest_mode = "interval"
-        db.settings.set_habit_start("porn", date(2026, 10, 1))
+        self.reading = Habit("Reading", BUILD, date(2026, 10, 1))
+        db.save_habit(self.reading)
         db.save_task(Task("Write the chapter", 90, DAY))
         db.set_day_kind(DAY, DayKind.DISRUPTION, "a cold")
-        db.set_habit_day(DAY, {"masturbation": 2, "porn": 1})
+        db.set_habit_mark(self.reading.id, DAY, 2)
         db.save_principle(Principle("rules", "My own rule", "Be kind.\nSleep."))
         custom = Sound(True, "classic", str(sound)) if sound else Sound()
         db.save_alarm(Alarm("Stretch", "10:30", sound=custom))
@@ -64,10 +66,11 @@ class RoundTripTests(BackupTestCase):
         self.assertEqual(other.settings.theme, "dark")
         self.assertTrue(other.settings.tray_icon)
         self.assertEqual(other.settings.selftest_mode, "interval")
-        self.assertEqual(other.settings.habit_start("porn"), date(2026, 10, 1))
+        (habit,) = other.list_habits()
+        self.assertEqual((habit.name, habit.kind, habit.start), ("Reading", BUILD, date(2026, 10, 1)))
         self.assertEqual([t.title for t in other.tasks_on(DAY, prayers=False)], ["Write the chapter"])
         self.assertEqual(other.day_kind(DAY), DayKind.DISRUPTION)
-        self.assertEqual(other.habit_counts(DAY, DAY)[DAY], {"masturbation": 2, "porn": 1})
+        self.assertEqual(other.habit_counts(habit.id, DAY, DAY), {DAY: 2})
         self.assertIn("My own rule", [p.title for p in other.list_principles("rules")])
         self.assertEqual([a.title for a in other.list_alarms()], ["Stretch"])
         self.assertIn("Gym", [a.title for a in other.list_activities()])
@@ -151,7 +154,9 @@ class UpgradeTests(BackupTestCase):
                     scratch = self.dir / "scratch.sqlite3"
                     scratch.write_bytes(data)
                     with sqlite3.connect(scratch) as conn:
-                        conn.execute("DROP TABLE habit_days")  # a version-8 database has no habit table
+                        conn.execute("DROP TABLE habit_marks")  # a version-8 database has no habit tables
+                        conn.execute("DROP TABLE habits")
+                        conn.execute("DROP TABLE habit_days")
                         conn.execute("PRAGMA user_version = 8")
                     data = scratch.read_bytes()
                 if item.filename == "manifest.json":
@@ -159,8 +164,9 @@ class UpgradeTests(BackupTestCase):
                 dst.writestr(item, data)
         other = self.fresh()
         self.restore(other, old)
-        self.assertEqual(other.habit_counts(DAY, DAY), {})  # the table exists again, empty
-        other.set_habit_day(DAY, {"porn": 1})
+        self.assertEqual(other.list_habits(), [])  # the tables exist again, empty
+        habit = Habit("Reading", BUILD, DAY)
+        other.save_habit(habit)
         with other.connection() as conn:
             self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
 

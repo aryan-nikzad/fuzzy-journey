@@ -50,7 +50,7 @@ To try it without installing: `./run.sh`.
 | **Alarms** | Reminders, prayer alarms that follow the timetable, and whether the alarm service is running. |
 | **Prayers** | The timetable for the year. |
 | **Recall** | Test yourself: your rules, recovery plan, today's shape, today's and tomorrow's tasks, prayers, reminders and routine, all hidden. Say each aloud, then tap to check. Nothing is graded or stored. |
-| **Habits** | A private calendar for two habits, counted on their own: per day a checkbox and how many times. Each has its own *Counting from* date that only changes what is counted, never erasing a day. Weekly and monthly averages appear only after 7 and 30 days have passed. It can be turned off in Preferences. |
+| **Habits** | A private calendar for habits you choose, to quit or to build. Add, rename, reorder and delete them. Each is marked per day (a checkbox and how many times) and counted from its own *Counting from* date, which never erases a day. Weekly and monthly figures appear only after 7 and 30 days have passed. It can be turned off in Preferences. |
 | **Rules** | Your must-do rules of life, in your own words (for example, the computer is for work only). Add, edit and delete them. Words only: they never change the schedule. |
 | **Recovery** | The plan for a day that went wrong, as short numbered steps you can edit and reorder. **Test myself** hides the steps so you can say them from memory first. It is a backup for the plan in your head, never a replacement for it. |
 
@@ -88,7 +88,9 @@ The prayer-time CSV files are deliberately **not** in the backup: they are not a
 
 ## The habit calendar
 
-**Habits** is a private page for two habits, each counted separately: per day, a checkbox for *did it happen* and a count for *how many times*. Each habit has its own **Counting from** date. Moving it changes only what the figures include: earlier days keep their marks and can still be edited, nothing is wiped. The figures are the last 7 days and the last 30 days (times, times a day, days it happened, days without) and the whole time since the start. A figure is never shown early: the weekly one needs seven finished days since the start, the monthly one thirty, and the page says how many days are still to go. Today is counted tomorrow, when it is finished. Turn the page off in Preferences (*Habit calendar*); that hides it and keeps your data.
+**Habits** is a private page for habits *you* choose. Press **Add a habit**, name it, and say whether you want to **quit** it (do less of it) or **build** it (do more of it). A few ideas are offered, such as exercise, reading, smoking or social media; nothing is added until you pick it. You can rename, reorder or delete a habit at any time (the pencil button); deleting removes its marked days too.
+
+Each habit is marked per day with a checkbox (*happened* or *done*) and a count of times, and counted from its own **Counting from** date. Moving that date changes only what the figures include: earlier days keep their marks and stay editable, nothing is wiped. The figures are the last 7 days, the last 30 days and the whole time since the start (times, times a day, and the days it happened against the days without, or for a habit you are building, the days done against the days missed). A figure is never shown early: the weekly one needs seven finished days since the start, the monthly one thirty, and the page says how many days are still to go. Today is counted tomorrow, when it is finished. On the calendar, a day is tinted orange when a habit you are quitting happened, green when a habit you are building was done, and split when both. Turn the page off in Preferences (*Habit calendar*); that hides it and keeps your data.
 
 ## Regular self-tests
 
