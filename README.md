@@ -147,6 +147,27 @@ Everything is under **Menu → Preferences → Focus**:
 - **Settle first.** If earlier days still have tasks with no status, a banner and a dialog ask you to settle them before the new day.
 - **Alarms.** Only pomodoro blocks, breaks and planning ring; tasks never do. To silence an alarm that is playing, press **Stop** in the app, use the **Stop alarm** button on its notification, press `Ctrl+.`, or run `python3 -m fuzzy_journey.service --stop` (handy for a keyboard shortcut).
 
+## The Flexibility pack
+
+An opt-in set of changes for days that do not run by the clock. **Preferences → Flexibility → "Use the
+flexibility pack"** switches it on; with it off, nothing below exists and the app behaves exactly as before
+(the pages are hidden, no extra buttons, no extra alarms, and your data is untouched).
+
+- **Morning routine** (page *Morning*). Your own steps, roughly how long each takes, and a *buffer* for slow
+  mornings. The day's work begins after the routine instead of at Fajr. The share of the day you work is
+  unchanged; only the room before 14:00 shrinks, so what no longer fits moves to the evening as usual.
+- **Start work with a button** (separate option). Pomodoros begin when you press the big *Start work*
+  button, every day. Until then the plan shows what starting *now* would mean, and nothing rings. The press
+  is saved and shown on the *Work log* calendar.
+- **Flexible blocks and End work.** Every focus block and every break has its own Start and Stop. A block
+  never ends by itself: at its planned length it rings once, and then you stop it when you are ready, so you
+  can work longer or shorter. Real times are what count. *End work* is the end of the day's work and opens
+  the check-in; *Resume work* takes a mistaken press back. The day still ends at bedtime.
+- **Do nothing.** A protected time (default 20 minutes) with the computer off: no games, no phone, no
+  reading, no planning. Place it *after work ends* (after planning, the natural moment to close the
+  laptop), at a *fixed time* (it then pauses work like the gym), or *before work, after the routine*. It rings
+  at both ends and shows as a card with a countdown.
+
 ## Command line
 
 The original planner is still here, with the same flags and output:

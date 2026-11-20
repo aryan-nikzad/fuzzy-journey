@@ -134,7 +134,7 @@ class UpgradeTests(unittest.TestCase):
                 conn.execute("PRAGMA user_version = 10")
                 conn.execute("INSERT INTO habits(name, kind, start_date, position, created_at) "
                              "VALUES ('Reading', 'build', '2026-11-01', 0, 'x')")
-            self.assertEqual(SCHEMA_VERSION, 11)
+            self.assertGreaterEqual(SCHEMA_VERSION, 11)  # later versions only add more tables
             upgraded = Database(path)
             self.assertEqual(upgraded.list_ideas(), [])
             self.assertEqual([h.name for h in upgraded.list_habits()], ["Reading"])

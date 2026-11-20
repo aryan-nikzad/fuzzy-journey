@@ -70,9 +70,82 @@ class UiSmokeTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_every_page_renders_and_refreshes(self):
-        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers", "rules", "recovery", "recall", "habits", "ideas"])
-        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "principles", "habits"):
+        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers", "rules", "recovery", "recall", "habits", "ideas", "morning", "worklog"])
+        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "principles", "habits", "flex"):
             self.ctx.changed(scope)
+
+    # -- the Flexibility pack ----------------------------------------------
+
+    def test_the_pack_is_invisible_until_it_is_switched_on(self):
+        from fuzzy_journey.flex import FlexSettings
+
+        w, ctx = self.window, self.ctx
+        ctx.settings.flex_pack = False
+        ctx.changed("flex")
+        for name in ("morning", "worklog"):
+            self.assertFalse(w.stack.get_page(w.pages[name]).get_visible())
+        self.assertFalse(w.pages["today"].flex_card.get_visible())
+        ctx.settings.flexibility = FlexSettings(enabled=True, manual_start=True)
+        ctx.changed("flex")
+        self.assertTrue(w.stack.get_page(w.pages["morning"]).get_visible())
+        self.assertTrue(w.stack.get_page(w.pages["worklog"]).get_visible())
+        ctx.settings.flex_pack = False
+        ctx.changed("flex")
+        self.assertFalse(w.stack.get_page(w.pages["morning"]).get_visible())
+        self.assertFalse(w.pages["today"].flex_card.get_visible())
+
+    def test_start_work_end_work_walk_through_the_card(self):
+        from datetime import timedelta
+        from fuzzy_journey import planner
+        from fuzzy_journey.flex import FlexSettings, RoutineItem
+        from fuzzy_journey.timeutil import now as clock_now
+
+        w, ctx = self.window, self.ctx
+        today = clock_now().date()
+        ctx.db.clear_flex_day(today)
+        ctx.db.save_routine_item(RoutineItem("Breakfast", 20))
+        ctx.settings.flexibility = FlexSettings(enabled=True, manual_start=True, blocks=True, nothing=True,
+                                                buffer=0)
+        ctx.changed("flex")
+        card = w.pages["today"].flex_card
+        self.assertTrue(card.get_visible())
+        self.assertTrue(w.pages["today"].card.suppressed)
+        self.assertTrue(card.cta.get_visible())  # the big button waits for the press
+        planner.start_work(ctx.db, ctx.library, clock_now())
+        ctx.changed("pomodoro")
+        self.assertTrue(card.stop.get_visible() and card.end.get_visible())
+        planner.stop_block(ctx.db, clock_now())
+        ctx.changed("pomodoro")
+        self.assertIn("Start", card.cta.get_label())
+        planner.end_work(ctx.db, clock_now())
+        ctx.changed("pomodoro")
+        self.assertTrue(card.settle.get_visible() and card.resume.get_visible())
+        self.assertFalse(card.cta.get_visible())
+        for name in ("morning", "worklog"):
+            w.pages[name].refresh()
+        # leave the shared database as it was found
+        ctx.db.clear_flex_day(today)
+        for item in ctx.db.routine_items():
+            ctx.db.delete_routine_item(item.id)
+        ctx.settings.flex_pack = False
+        ctx.changed("flex")
+
+    def test_the_flexibility_preferences_page_follows_the_switches(self):
+        from fuzzy_journey.ui.dialogs.preferences import PreferencesWindow
+
+        ctx = self.ctx
+        ctx.settings.flex_pack = False
+        prefs = PreferencesWindow(self.window, ctx)
+        self.assertFalse(prefs.flex_groups[0].get_sensitive())
+        prefs.flex_row.set_active(True)
+        prefs.flex_start.set_active(True)
+        prefs.flex_minutes.set_value(35)
+        f = ctx.settings.flexibility
+        self.assertTrue(f.enabled and f.manual_start)
+        self.assertEqual(f.nothing_minutes, 35)
+        prefs.flex_row.set_active(False)
+        self.assertFalse(ctx.settings.flexibility.enabled)
+        prefs.destroy()
 
     # -- rules and recovery ------------------------------------------------
 
