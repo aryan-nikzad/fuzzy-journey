@@ -21,7 +21,7 @@ def _relation(day: date, today: date) -> str:
 class TomorrowPage(Page):
     """Plan a day: its focus time, its tasks and its pomodoro schedule. Opens on tomorrow; any day can be chosen."""
 
-    listens_to = frozenset({"day", "rhythm", "data", "location", "tasks", "pomodoro"})
+    listens_to = frozenset({"day", "rhythm", "data", "location", "tasks", "pomodoro", "flex"})
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)

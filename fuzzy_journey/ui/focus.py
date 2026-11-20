@@ -267,6 +267,8 @@ class FocusCard(Gtk.Box):
         self._schedule: pomodoro.Schedule | None = None
         self._pauses: list = []  # every pause of the day, the user's own included
         self._day = clock_now().date()
+        #: The Flexibility pack's card sets this when it has taken over the work clock (never otherwise).
+        self.suppressed = False
 
         self.overline = label("", "fj-overline")
         self.timer = label("", "fj-timer")
@@ -308,7 +310,7 @@ class FocusCard(Gtk.Box):
     def _render(self) -> None:
         now = clock_now()
         schedule = self._schedule
-        if not schedule or not schedule.segments:
+        if self.suppressed or not schedule or not schedule.segments:
             self.set_visible(False)
             return
         segments = schedule.segments  # already laid out around every pause, the user's included

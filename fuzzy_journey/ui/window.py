@@ -88,6 +88,9 @@ class MainWindow(Adw.ApplicationWindow):
         ("recall", "Recall", "dialog-question-symbolic"),
         ("habits", "Habits", "view-grid-symbolic"),
         ("ideas", "Ideas", "starred-symbolic"),
+        # Flexibility pack pages: hidden unless the pack is on. They sit last so no shortcut moves.
+        ("morning", "Morning", "weather-few-clouds-symbolic"),
+        ("worklog", "Work log", "document-open-recent-symbolic"),
     )
 
     def _build_pages(self) -> None:
@@ -95,6 +98,8 @@ class MainWindow(Adw.ApplicationWindow):
         from .pages.bank import BankPage
         from .pages.habits import HabitsPage
         from .pages.ideas import IdeasPage
+        from .pages.morning import MorningPage
+        from .pages.worklog import WorkLogPage
         from .pages.prayers import PrayersPage
         from .pages.recall import RecallPage
         from .pages.recovery import RecoveryPage
@@ -105,12 +110,22 @@ class MainWindow(Adw.ApplicationWindow):
 
         factories = {"today": TodayPage, "tomorrow": TomorrowPage, "routine": RoutinePage, "bank": BankPage,
                      "alarms": AlarmsPage, "prayers": PrayersPage, "rules": RulesPage, "recovery": RecoveryPage,
-                     "recall": RecallPage, "habits": HabitsPage, "ideas": IdeasPage}
+                     "recall": RecallPage, "habits": HabitsPage, "ideas": IdeasPage,
+                     "morning": MorningPage, "worklog": WorkLogPage}
         for name, title, icon in self.PAGES:
             page = factories[name](self.ctx)
             self.pages[name] = page
             self.stack.add_titled_with_icon(page, name, title, icon)
         self._show_habits()
+        self._show_flex()
+
+    def _show_flex(self) -> None:
+        """The pack's pages exist only while the pack is on; turning it off hides them and deletes nothing."""
+        fs = self.ctx.settings.flexibility
+        for name, wanted in (("morning", fs.use_routine), ("worklog", fs.controls_work)):
+            self.stack.get_page(self.pages[name]).set_visible(wanted)
+            if not wanted and self.stack.get_visible_child() is self.pages[name]:
+                self.show_page("today")
 
     def _show_habits(self) -> None:
         """The habit calendar is a page you can turn off; turning it off hides it and deletes nothing."""
@@ -148,6 +163,8 @@ class MainWindow(Adw.ApplicationWindow):
                 page.refresh()
         if scope in ("habits", "all"):
             self._show_habits()
+        if scope in ("flex", "all"):
+            self._show_flex()
         if scope in ("alarms", "all"):
             self._check_service()
         if scope in ("tasks", "all"):

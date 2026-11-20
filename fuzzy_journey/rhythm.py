@@ -211,6 +211,7 @@ def calculate_work_blocks(
     percentage: float,
     flex: timedelta = timedelta(0),
     evening_start: time | str = DEFAULT_EVENING_START,
+    start: datetime | None = None,
 ) -> WorkBlocks:
     """Split ``percentage`` of the Fajr-to-Isha window into two blocks.
 
@@ -220,6 +221,10 @@ def calculate_work_blocks(
 
         Block 1: Fajr -> 14:00   (as much of the target as fits)
         Block 2: evening_start -> onward (whatever did not fit)
+
+    ``start`` (the Flexibility pack) lets the first block begin later than Fajr: after a morning
+    routine, or when the person presses *Start work*. The target stays the same share of the day;
+    only the room before 14:00 shrinks, so what no longer fits spills into the evening as usual.
     """
     total_window = isha - fajr
     if total_window.total_seconds() < 0:
@@ -230,7 +235,8 @@ def calculate_work_blocks(
     limit = fajr.replace(hour=NOON_LIMIT.hour, minute=NOON_LIMIT.minute, second=0, microsecond=0)
     if limit < fajr:
         limit += timedelta(days=1)
-    morning_room = limit - fajr
+    begin = fajr if start is None else max(fajr, start)
+    morning_room = max(timedelta(0), limit - begin)
 
     morning = min(target, morning_room)
     overflow = target - morning
@@ -246,8 +252,8 @@ def calculate_work_blocks(
     return WorkBlocks(
         total=target,
         remain=overflow,
-        block1_start=fajr,
-        block1_end=fajr + morning,
+        block1_start=begin,
+        block1_end=begin + morning,
         block2_start=block2_start,
         block2_end=block2_start + overflow,
     )
@@ -348,6 +354,7 @@ def plan_day(
     start: time | None = None,
     overtime: timedelta = timedelta(0),
     evening_extra: timedelta = timedelta(0),
+    work_start: datetime | None = None,
 ) -> DayPlan:
     """Plan one day from its Fajr and Isha.
 
@@ -367,6 +374,9 @@ def plan_day(
     (or when the last block ends, if later), pushes bedtime out, and is paid for
     in sleep, which ``sleep_lost`` shows. Only an ordinary working day can have it: Rest, Disruption and
     Offline days never do.
+
+    ``work_start`` is used only by the Flexibility pack: the first work block may not begin before it
+    (after the morning routine, or when *Start work* was pressed). ``None`` keeps the plain rhythm.
     """
     fajr_at = datetime.combine(day, fajr)
     isha_at = datetime.combine(day, isha)
@@ -381,10 +391,11 @@ def plan_day(
     elif kind is DayKind.RECOVERED:
         wake_at = recovered_start(fajr_at, isha_at, start)
         target = _whole_minutes((isha_at - wake_at) * kind.share + flex)
-        morning = Span(wake_at, wake_at + target) if target > timedelta(0) else None
+        begin = wake_at if work_start is None else max(wake_at, work_start)
+        morning = Span(begin, begin + target) if target > timedelta(0) else None
         evening = None
     else:
-        blocks = calculate_work_blocks(fajr_at, isha_at, kind.share, flex, evening_start)
+        blocks = calculate_work_blocks(fajr_at, isha_at, kind.share, flex, evening_start, work_start)
         # Whole minutes throughout: what the clock shows is what the arithmetic used.
         target = _whole_minutes(blocks.total)
         overflow = _whole_minutes(blocks.remain)

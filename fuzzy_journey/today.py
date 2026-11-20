@@ -8,11 +8,23 @@ renders it, so every rule here is covered by plain unit tests.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from enum import Enum
 
 from . import alarms as alarm_rules
+from .flex import (
+    AFTER_WORK,
+    BEFORE_WORK,
+    FIXED_TIME,
+    PLANNING_AFTER_END,
+    FlexInput,
+    FlexView,
+    nothing_span_fixed,
+    routine_plan,
+    run_events,
+)
+from .flex import flex_state as compute_flex_state
 from .models import Activity, Alarm, PrayerAlarm, Sound
 from .pomodoro import (
     ManualPause,
@@ -33,6 +45,7 @@ from .rhythm import (
     WorkProgress,
     WorkStatus,
     collect_pauses,
+    merge_pauses,
     plan_day,
     with_manual_pauses,
     work_progress,
@@ -44,6 +57,8 @@ DAILY_PRAYERS = ("Dhuhr", "Asr", "Maghrib", "Isha")
 
 class Slot(Enum):
     WAKE = "wake"
+    ROUTINE = "routine"  # a step of the morning routine (Flexibility pack)
+    NOTHING = "nothing"  # the Do-nothing time (Flexibility pack)
     WORK = "work"
     FREE = "free"
     PRAYER = "prayer"
@@ -118,6 +133,8 @@ class TodayView:
     #: When the day's work is over and its tasks should be settled (planning begins).
     closing_at: datetime | None = None
     pomodoro_events: tuple = ()
+    #: Everything the Flexibility pack worked out. ``None`` when the pack is off: nothing else changes then.
+    flexpack: FlexView | None = None
 
     @property
     def closing_due(self) -> bool:
@@ -177,6 +194,7 @@ def build_today(
     pomodoro: PomodoroSettings | None = None,
     pomodoro_sound: Sound | None = None,
     pomodoro_pauses: Sequence[ManualPause] = (),
+    flexpack: FlexInput | None = None,
 ) -> TodayView:
     day = now.date()
     activities = [a for a in activities]
@@ -184,15 +202,56 @@ def build_today(
     wake_act = next((a for a in todays if a.category == "wake"), None)
     sleep_act = next((a for a in todays if a.category == "sleep"), None)
 
-    plan = (
-        plan_day(
+    recovered_from = start  # (``start`` is reused below for other spans)
+
+    def make_plan(work_start: datetime | None = None) -> DayPlan | None:
+        if not prayer_day:
+            return None
+        return plan_day(
             day, kind, fajr=prayer_day.fajr, isha=prayer_day.isha, next_fajr=next_fajr,
-            evening_start=evening_start, flex=flex, start=start,
+            evening_start=evening_start, flex=flex, start=recovered_from,
             overtime=timedelta(minutes=overtime), evening_extra=timedelta(minutes=evening),
+            work_start=work_start,
         )
-        if prayer_day
-        else None
-    )
+
+    plan = make_plan()
+
+    # ---- Flexibility pack (opt-in): the morning routine, a work start of your own, the Do-nothing time.
+    # With the pack off ``fx`` is None and every line below this block behaves exactly as it always did.
+    fx = flexpack if flexpack is not None and flexpack.settings.enabled else None
+    fs = fx.settings if fx else None
+    routine = None
+    waiting = never_started = False
+    nothing_where = ""
+    nothing_before = timedelta(0)
+    day_start = None
+    if fx and plan:
+        day_start = datetime.combine(day, wake_act.start_clock) if wake_act else plan.wake
+        nothing_where = fs.nothing_where if fs.use_nothing else ""
+        if kind.no_work and nothing_where in (AFTER_WORK, BEFORE_WORK):
+            nothing_where = FIXED_TIME  # no work to come after or before: keep it at a set time
+        if nothing_where == BEFORE_WORK:
+            nothing_before = timedelta(minutes=fs.nothing_minutes)
+        if fs.use_routine:
+            routine = routine_plan(day_start, fx.routine, fs.buffer)
+        shifted = routine is not None or nothing_before > timedelta(0)
+        base = (routine.end if routine else day_start) + nothing_before
+        flex_start = None
+        if fs.controls_work and not kind.no_work:
+            if fx.day.started_at is not None:
+                flex_start = fx.day.started_at
+            else:
+                flex_start = max(base if shifted else plan.wake, now.replace(second=0, microsecond=0))
+                waiting = fs.use_start
+        elif shifted and not kind.no_work:
+            flex_start = base
+        if flex_start is not None:
+            planned = make_plan(flex_start)
+            if fs.controls_work and fx.day.started_at is None and now >= plan.bedtime:
+                # Never started, and the day is over: nothing was worked. Do not invent an evening of it.
+                never_started, waiting = True, False
+                planned = replace(plan, morning=None, evening=None, overtime=None, free=None, target=timedelta(0))
+            plan = planned
 
     # ---- wake and bedtime: personal Wake / Sleep activities override the prayer-derived defaults
     wake = bedtime = None
@@ -214,6 +273,14 @@ def build_today(
     # The user's own pauses are pauses like any other, so the work clock and the pomodoro
     # schedule count the same time. Bedtime is the deadline: work never runs past it.
     pauses = with_manual_pauses(collect_pauses(activities, day), pomodoro_pauses, now)
+    nothing: Span | None = None
+    nothing_note = ""
+    if fx and nothing_where == FIXED_TIME:
+        nothing = nothing_span_fixed(day, fs.nothing_at, fs.nothing_minutes)
+        pauses = merge_pauses([*pauses, Pause(nothing, "Do nothing")])  # work waits for it, like for the gym
+    elif fx and nothing_where == BEFORE_WORK and day_start is not None:
+        begin = routine.end if routine else day_start
+        nothing = Span(begin, begin + nothing_before)
     deadline = bedtime if protect_bedtime else None
     work: list[WorkItem] = []
     if plan:
@@ -241,12 +308,59 @@ def build_today(
     # ---- pomodoro and planning (only when the caller opts in)
     schedule: Schedule | None = None
     pomo_events = []
+    state = None
+    controlled = bool(fx and fs.controls_work and plan and not kind.no_work and not never_started)
     if pomodoro is not None:
+        # When you start and end the work yourself, planning follows *End work* instead of sitting at a fixed place.
+        laid_out = replace(pomodoro, planning_enabled=False) if controlled else pomodoro
         schedule = build_schedule(
-            [(w.progress.start, w.progress.planned) for w in work], pauses, pomodoro, deadline
+            [(w.progress.start, w.progress.planned) for w in work], pauses, laid_out, deadline
         )
         held = next((p.span.start for p in pauses if p.open), None)  # nothing rings until resumed
         pomo_events = schedule_events(schedule, day, pomodoro_sound or Sound(), hold_after=held)
+        if controlled:
+            state = compute_flex_state(
+                fx.day, now=now, pauses=pauses, pomodoro=pomodoro,
+                target=schedule.focus, deadline=deadline, settings=fs,
+            )
+            if fs.use_blocks:
+                pomo_events = run_events(state, day, pomodoro_sound or Sound(), pauses, pomodoro, held is not None)
+            elif waiting:
+                pomo_events = []
+            elif fx.day.ended_at is not None:
+                pomo_events = [e for e in pomo_events if e.due <= fx.day.ended_at]
+
+    # ---- the Do-nothing time after work, and the pack's own alarms
+    if fx and nothing_where == AFTER_WORK and not kind.no_work and not never_started:
+        gap = timedelta(minutes=PLANNING_AFTER_END if (pomodoro is None or pomodoro.planning_enabled) else 0)
+        if controlled and fx.day.ended_at is not None:
+            begin = fx.day.ended_at + gap
+        elif controlled:
+            end_of_work = max((w.progress.end for w in work), default=None)
+            begin = end_of_work + gap if end_of_work else None
+            nothing_note = "after you end work"
+        else:
+            planning = schedule.planning if schedule else None
+            end_of_work = planning.end if planning else max((w.progress.end for w in work), default=None)
+            begin = end_of_work
+        if begin is not None:
+            nothing = Span(begin, begin + timedelta(minutes=fs.nothing_minutes))
+    if fx and nothing is not None and fs.nothing_alarm and not nothing_note:
+        from .alarms import ScheduledEvent  # local: alarms imports the database, which imports this module
+
+        ring = pomodoro_sound or Sound()
+        pomo_events = [
+            *pomo_events,
+            ScheduledEvent("nothing:start", f"Do nothing · {fs.nothing_minutes} min · computer off",
+                           nothing.start, ring, day, "Schedule"),
+            ScheduledEvent("nothing:end", "Do nothing is over", nothing.end, ring, day, "Schedule"),
+        ]
+    if fx and fs.use_start and waiting and routine is not None:
+        from .alarms import ScheduledEvent
+
+        pomo_events = [*pomo_events, ScheduledEvent(
+            "flex:routine-over", "Morning routine is over · press Start work", routine.end,
+            pomodoro_sound or Sound(), day, "Schedule")]
 
     # ---- alarms
     reminder_due = {
@@ -302,6 +416,31 @@ def build_today(
         add(p.start, p.end, Slot.WORK, "Planning",
             f"{_hm(p.start)}–{_hm(p.end)} · settle today, plan tomorrow", True)
 
+    if fx:
+        if routine:
+            for step in routine.steps:
+                detail = (f"{_hm(step.span.start)}–{_hm(step.span.end)} · {step.minutes} min"
+                          + (" · slack for a slow morning" if step.buffer else ""))
+                add(step.span.start, step.span.end, Slot.ROUTINE, step.title, detail)
+        if state:
+            if state.started_at:
+                add(state.started_at, None, Slot.WORK, "Work started", "You pressed Start work")
+            for run in state.runs:
+                until = run.stop or (now if run.stop is None and state.ended_at is None else None)
+                length = int(((run.stop or min(now, deadline or now)) - run.start).total_seconds() // 60)
+                tail = _hm(run.stop) if run.stop else "now"
+                add(run.start, run.stop or until, Slot.WORK if run.kind.value == "focus" else Slot.ACTIVITY,
+                    run.kind.label, f"{_hm(run.start)}–{tail} · {max(0, length)} min")
+            if state.ended_at:
+                add(state.ended_at, None, Slot.WORK, "Work ended", "You pressed End work")
+                if pomodoro is None or pomodoro.planning_enabled:
+                    add(state.ended_at, state.ended_at + timedelta(minutes=PLANNING_AFTER_END), Slot.WORK, "Planning",
+                        "Settle today, plan tomorrow", True)
+        if nothing is not None and fs.use_nothing:
+            detail = f"{_hm(nothing.start)}–{_hm(nothing.end)} · {fs.nothing_minutes} min · computer off"
+            add(nothing.start, nothing.end, Slot.NOTHING, "Do nothing",
+                detail + (f" · {nothing_note}" if nothing_note else ""), fs.nothing_alarm and not nothing_note)
+
     if plan and kind is DayKind.OFFLINE:
         add(plan.wake, plan.bedtime, Slot.FREE, "Offline day", "No work · computer off")
     elif plan and kind is DayKind.REST:
@@ -353,10 +492,15 @@ def build_today(
                 segments.append(DayBarSegment(pause.span, "pause"))
     marks = tuple(m for n in DAILY_PRAYERS if prayer_day and (m := prayer_day.at(n)))
 
-    worked = focus_worked(schedule, pauses, now) if schedule else timedelta(0)
+    worked = state.worked if state else focus_worked(schedule, pauses, now) if schedule else timedelta(0)
     closing_at = None
     if not kind.no_work and work and any(w.progress.planned > timedelta(0) for w in work):
         closing_at = closing_moment(schedule, max(w.progress.end for w in work))
+    if controlled:
+        closing_at = fx.day.ended_at  # the check-in waits for the person to press End work
+    flexview = (
+        FlexView(fs, routine, state, nothing, nothing_note, waiting, never_started) if fx else None
+    )
 
     return TodayView(
         now=now, day=day, kind=kind, plan=plan, wake=wake, bedtime=bedtime, sleep=sleep,
@@ -364,6 +508,7 @@ def build_today(
         timeline=tuple(rows), segments=tuple(segments), prayer_marks=marks,
         next_alarm=next_alarm, alarm_times=frozenset(alarm_moments), schedule=schedule,
         pauses=tuple(pauses), worked=worked, closing_at=closing_at, pomodoro_events=tuple(pomo_events),
+        flexpack=flexview,
     )
 
 

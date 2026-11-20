@@ -15,6 +15,21 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from . import selftest
+from .flex import (
+    BUFFER_DEFAULT,
+    BUFFER_RANGE,
+    MAX_ROUTINE_ITEMS,
+    NOTHING_DEFAULT,
+    NOTHING_DEFAULT_AT,
+    NOTHING_PLACES,
+    NOTHING_RANGE,
+    AFTER_WORK,
+    FlexDay,
+    FlexSettings,
+    RoutineItem,
+    Run,
+    check_routine_item,
+)
 from .habits import MAX_HABITS, Habit, check_habit
 from .habits import clamp as clamp_habit
 from .ideas import MAX_IDEAS, Idea, check_idea, reordered
@@ -33,14 +48,14 @@ from .models import (
     TaskStatus,
 )
 from .paths import DATABASE_PATH, ensure_data_dir
-from .pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE, ManualPause, PomodoroSettings
+from .pomodoro import EVERY_RANGE, FOCUS_RANGE, LONG_RANGE, SHORT_RANGE, ManualPause, PomodoroSettings, SegmentKind
 from .principles import DEFAULT_RECOVERY, DEFAULT_RULES, FIRST_COMPUTER_RULE, Principle, check_principle
 from .rhythm import DEFAULT_EVENING_START, DayKind, parse_evening_start
 from .selftest import DEFAULT_HOURS, HOURS_RANGE, MODE_OFF, MODES
 from .tasks import ORDER_MODES, ORDER_SEQUENCE, PRAYERS, can_cancel, can_carry
 from .timeutil import duration_hhmm, parse_clock, parse_hhmm_duration
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def _now_iso() -> str:
@@ -329,10 +344,39 @@ def _migrate_to_v11(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migrate_to_v12(conn: sqlite3.Connection) -> None:
+    """The Flexibility pack: a morning routine, the day's real start and end, and every block you ran.
+    Nothing here is read unless the pack is switched on, so everyone starts exactly as before."""
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS routine_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            minutes INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            position INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS flex_days (
+            day_date TEXT PRIMARY KEY,
+            started_at TEXT,
+            ended_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS flex_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_date TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            stopped_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS flex_runs_day ON flex_runs(day_date);
+        """
+    )
+
+
 #: Append new migrations here; never edit an old one.
 MIGRATIONS = (
     _migrate_to_v1, _migrate_to_v2, _migrate_to_v3, _migrate_to_v4, _migrate_to_v5, _migrate_to_v6, _migrate_to_v7,
-    _migrate_to_v8, _migrate_to_v9, _migrate_to_v10, _migrate_to_v11,
+    _migrate_to_v8, _migrate_to_v9, _migrate_to_v10, _migrate_to_v11, _migrate_to_v12,
 )
 
 
@@ -1136,6 +1180,153 @@ class Database:
                 (at.isoformat(timespec="seconds"), day.isoformat()),
             )
 
+    # -- the Flexibility pack: morning routine -----------------------------
+
+    def routine_items(self) -> list[RoutineItem]:
+        with self.connection() as conn:
+            rows = conn.execute("SELECT * FROM routine_items ORDER BY position, id").fetchall()
+        return [RoutineItem(r["title"], r["minutes"], bool(r["enabled"]), r["position"], r["id"]) for r in rows]
+
+    def save_routine_item(self, item: RoutineItem) -> int:
+        problem = check_routine_item(item.title, item.minutes)
+        if problem:
+            raise ValueError(problem)
+        with self.transaction(immediate=True) as conn:
+            if item.id is None:
+                count = conn.execute("SELECT COUNT(*) FROM routine_items").fetchone()[0]
+                if count >= MAX_ROUTINE_ITEMS:
+                    raise ValueError(f"A routine can have {MAX_ROUTINE_ITEMS} steps at most.")
+                last = conn.execute("SELECT COALESCE(MAX(position), -1) FROM routine_items").fetchone()[0]
+                cursor = conn.execute(
+                    "INSERT INTO routine_items(title, minutes, enabled, position) VALUES (?, ?, ?, ?)",
+                    (item.title.strip(), int(item.minutes), int(item.enabled), last + 1),
+                )
+                item.id = int(cursor.lastrowid)
+                item.position = last + 1
+            else:
+                conn.execute(
+                    "UPDATE routine_items SET title=?, minutes=?, enabled=? WHERE id=?",
+                    (item.title.strip(), int(item.minutes), int(item.enabled), item.id),
+                )
+        return int(item.id)
+
+    def delete_routine_item(self, item_id: int) -> None:
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM routine_items WHERE id=?", (item_id,))
+
+    def move_routine_item(self, item: RoutineItem, direction: int) -> bool:
+        """Swap a step with its neighbour: -1 up, +1 down. False at either end."""
+        with self.transaction(immediate=True) as conn:
+            ids = [r[0] for r in conn.execute("SELECT id FROM routine_items ORDER BY position, id")]
+            if item.id not in ids:
+                return False
+            i, j = ids.index(item.id), ids.index(item.id) + direction
+            if not 0 <= j < len(ids):
+                return False
+            ids[i], ids[j] = ids[j], ids[i]
+            for position, row_id in enumerate(ids):
+                conn.execute("UPDATE routine_items SET position=? WHERE id=?", (position, row_id))
+        return True
+
+    # -- the Flexibility pack: the day you really had ----------------------
+
+    @staticmethod
+    def _stamp(at: datetime) -> str:
+        return at.isoformat(timespec="seconds")
+
+    def flex_day(self, day: date) -> FlexDay:
+        return self.flex_days(day, day).get(day, FlexDay())
+
+    def flex_days(self, start: date, end: date) -> dict[date, FlexDay]:
+        """Every day from ``start`` through ``end`` that has a record: when it began, ended, and each block."""
+        with self.connection() as conn:
+            days = conn.execute(
+                "SELECT * FROM flex_days WHERE day_date BETWEEN ? AND ?", (start.isoformat(), end.isoformat())
+            ).fetchall()
+            runs = conn.execute(
+                "SELECT * FROM flex_runs WHERE day_date BETWEEN ? AND ? ORDER BY started_at, id",
+                (start.isoformat(), end.isoformat()),
+            ).fetchall()
+        by_day: dict[str, list[Run]] = {}
+        for r in runs:
+            by_day.setdefault(r["day_date"], []).append(Run(
+                SegmentKind(r["kind"]), datetime.fromisoformat(r["started_at"]),
+                datetime.fromisoformat(r["stopped_at"]) if r["stopped_at"] else None, r["id"],
+            ))
+        found: dict[date, FlexDay] = {}
+        for row in days:
+            key = row["day_date"]
+            found[date.fromisoformat(key)] = FlexDay(
+                datetime.fromisoformat(row["started_at"]) if row["started_at"] else None,
+                datetime.fromisoformat(row["ended_at"]) if row["ended_at"] else None,
+                tuple(by_day.pop(key, ())),
+            )
+        for key, items in by_day.items():  # blocks without a day row cannot happen, but never lose them
+            found[date.fromisoformat(key)] = FlexDay(items[0].start, None, tuple(items))
+        return found
+
+    def start_flex_day(self, day: date, at: datetime) -> bool:
+        """Record that work began at ``at``. Only the first press counts. True when it was recorded."""
+        with self.transaction(immediate=True) as conn:
+            row = conn.execute("SELECT started_at FROM flex_days WHERE day_date=?", (day.isoformat(),)).fetchone()
+            if row and row["started_at"]:
+                return False
+            conn.execute(
+                """INSERT INTO flex_days(day_date, started_at) VALUES (?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET started_at=excluded.started_at""",
+                (day.isoformat(), self._stamp(at)),
+            )
+        return True
+
+    def end_flex_day(self, day: date, at: datetime) -> None:
+        """Record the end of work, and stop any block that is still running."""
+        with self.transaction(immediate=True) as conn:
+            conn.execute(
+                "UPDATE flex_runs SET stopped_at=? WHERE day_date=? AND stopped_at IS NULL",
+                (self._stamp(at), day.isoformat()),
+            )
+            conn.execute(
+                """INSERT INTO flex_days(day_date, started_at, ended_at) VALUES (?, ?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET ended_at=excluded.ended_at""",
+                (day.isoformat(), self._stamp(at), self._stamp(at)),
+            )
+
+    def reopen_flex_day(self, day: date) -> None:
+        """Take back *End work*: the day carries on."""
+        with self.transaction() as conn:
+            conn.execute("UPDATE flex_days SET ended_at=NULL WHERE day_date=?", (day.isoformat(),))
+
+    def clear_flex_day(self, day: date) -> None:
+        """Forget that the day was started (a mistaken press). Its blocks go with it."""
+        with self.transaction() as conn:
+            conn.execute("DELETE FROM flex_runs WHERE day_date=?", (day.isoformat(),))
+            conn.execute("DELETE FROM flex_days WHERE day_date=?", (day.isoformat(),))
+
+    def start_flex_run(self, day: date, kind: SegmentKind, at: datetime) -> int | None:
+        """Begin a block or a break. Nothing starts while another is running."""
+        with self.transaction(immediate=True) as conn:
+            if conn.execute("SELECT 1 FROM flex_runs WHERE day_date=? AND stopped_at IS NULL",
+                            (day.isoformat(),)).fetchone():
+                return None
+            cursor = conn.execute(
+                "INSERT INTO flex_runs(day_date, kind, started_at) VALUES (?, ?, ?)",
+                (day.isoformat(), kind.value, self._stamp(at)),
+            )
+            conn.execute(
+                """INSERT INTO flex_days(day_date, started_at) VALUES (?, ?)
+                   ON CONFLICT(day_date) DO UPDATE SET started_at=COALESCE(flex_days.started_at, excluded.started_at)""",
+                (day.isoformat(), self._stamp(at)),
+            )
+        return int(cursor.lastrowid)
+
+    def stop_flex_run(self, day: date, at: datetime) -> bool:
+        with self.transaction(immediate=True) as conn:
+            cursor = conn.execute(
+                "UPDATE flex_runs SET stopped_at=? WHERE day_date=? AND stopped_at IS NULL",
+                (self._stamp(at), day.isoformat()),
+            )
+        return cursor.rowcount > 0
+
 
 # --------------------------------------------------------------------------
 # Settings
@@ -1427,3 +1618,49 @@ class Settings:
     @tray_icon.setter
     def tray_icon(self, value: bool) -> None:
         self.set("tray_icon", "1" if value else "0")
+
+    # the Flexibility pack ---------------------------------------------------
+    # Every one of these is read only when ``flex_pack`` is on; with it off the app is unchanged.
+
+    @property
+    def flex_pack(self) -> bool:
+        """The Flexibility pack as a whole. Off by default."""
+        return self._flag("flex_pack", False)
+
+    @flex_pack.setter
+    def flex_pack(self, value: bool) -> None:
+        self.set("flex_pack", "1" if value else "0")
+
+    @property
+    def flexibility(self) -> FlexSettings:
+        """The pack's switches, in one object. ``enabled`` is False unless the pack is on."""
+        d = FlexSettings()
+        where = self.get("flex_nothing_where", AFTER_WORK)
+        try:
+            at = parse_clock(self.get("flex_nothing_at", "") or NOTHING_DEFAULT_AT.strftime("%H:%M"))
+        except ValueError:
+            at = NOTHING_DEFAULT_AT
+        return FlexSettings(
+            enabled=self.flex_pack,
+            routine=self._flag("flex_routine", d.routine),
+            buffer=self._number("flex_buffer", d.buffer, *BUFFER_RANGE),
+            manual_start=self._flag("flex_manual_start", d.manual_start),
+            blocks=self._flag("flex_blocks", d.blocks),
+            nothing=self._flag("flex_nothing", d.nothing),
+            nothing_minutes=self._number("flex_nothing_minutes", NOTHING_DEFAULT, *NOTHING_RANGE),
+            nothing_where=where if where in NOTHING_PLACES else AFTER_WORK,
+            nothing_at=at,
+            nothing_alarm=self._flag("flex_nothing_alarm", d.nothing_alarm),
+        )
+
+    @flexibility.setter
+    def flexibility(self, v: FlexSettings) -> None:
+        self.flex_pack = v.enabled
+        for key, value in (
+            ("flex_routine", int(v.routine)), ("flex_buffer", v.buffer),
+            ("flex_manual_start", int(v.manual_start)), ("flex_blocks", int(v.blocks)),
+            ("flex_nothing", int(v.nothing)), ("flex_nothing_minutes", v.nothing_minutes),
+            ("flex_nothing_where", v.nothing_where), ("flex_nothing_at", v.nothing_at.strftime("%H:%M")),
+            ("flex_nothing_alarm", int(v.nothing_alarm)),
+        ):
+            self.set(key, str(value))

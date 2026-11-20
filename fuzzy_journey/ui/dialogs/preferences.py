@@ -34,6 +34,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         page = Adw.PreferencesPage(title="General", icon_name="preferences-system-symbolic")
         self.add(page)
         self._focus_page()
+        self._flex_page()
 
         # -- appearance
         look = Adw.PreferencesGroup(title="Appearance")
@@ -108,6 +109,103 @@ class PreferencesWindow(Adw.PreferencesWindow):
             activatable=False,
         ))
         page.add(store)
+
+    # -- flexibility pack ---------------------------------------------------
+
+    def _flex_page(self) -> None:
+        """One switch turns the whole pack on; with it off the app is exactly as before."""
+        from ...flex import NOTHING_LABELS, NOTHING_PLACES, NOTHING_RANGE, NOTHING_RULES
+        from ..widgets import TimeEntry
+
+        page = Adw.PreferencesPage(title="Flexibility", icon_name="view-reveal-symbolic")
+        self.add(page)
+        f = self.ctx.settings.flexibility
+        self._flex_quiet = True
+
+        top = Adw.PreferencesGroup(
+            title="Flexibility pack",
+            description="Optional changes for days that do not run by the clock: a morning routine, starting and "
+                        "ending work yourself, blocks you can lengthen or cut short, and a time to do nothing. "
+                        "Off, the app works exactly as it always has.")
+        self.flex_row = Adw.SwitchRow(title="Use the flexibility pack", subtitle="Switch on the options below.")
+        self.flex_row.set_active(f.enabled)
+        self.flex_row.connect("notify::active", self._on_flex)
+        top.add(self.flex_row)
+        page.add(top)
+
+        def switch(title, subtitle, value):
+            row = Adw.SwitchRow(title=title, subtitle=subtitle)
+            row.set_active(value)
+            row.connect("notify::active", self._on_flex)
+            return row
+
+        self.flex_groups = []
+        routine = Adw.PreferencesGroup(title="Morning")
+        self.flex_routine = switch("Morning routine",
+                                   "A page for your morning steps. Work starts after them, not at Fajr.", f.routine)
+        routine.add(self.flex_routine)
+        page.add(routine)
+
+        work = Adw.PreferencesGroup(title="Starting and ending work")
+        self.flex_start = switch("Start work with a button",
+                                 "Pomodoros begin when you press Start work, every day, and the time is saved.",
+                                 f.manual_start)
+        self.flex_blocks = switch("Flexible blocks and End work",
+                                  "Every focus block and break has its own Start and Stop, and you press End work.",
+                                  f.blocks)
+        work.add(self.flex_start)
+        work.add(self.flex_blocks)
+        page.add(work)
+
+        nothing = Adw.PreferencesGroup(title="Do nothing", description=NOTHING_RULES)
+        self.flex_nothing = switch("A time to do nothing", "Protected, with an alarm at both ends.", f.nothing)
+        self.flex_minutes = Adw.SpinRow.new_with_range(*NOTHING_RANGE, 5)
+        self.flex_minutes.set_title("Minutes")
+        self.flex_minutes.set_value(f.nothing_minutes)
+        self.flex_minutes.connect("notify::value", self._on_flex)
+        self.flex_where = Adw.ComboRow(title="When")
+        self.flex_where.set_model(Gtk.StringList.new([NOTHING_LABELS[k] for k in NOTHING_PLACES]))
+        self.flex_where.set_selected(NOTHING_PLACES.index(f.nothing_where))
+        self.flex_where.connect("notify::selected", self._on_flex)
+        self.flex_at = TimeEntry(f.nothing_at)
+        self.flex_at.connect("changed", self._on_flex)
+        self.flex_at_row = Adw.ActionRow(title="Fixed time", subtitle="Also used on days with no work.")
+        self.flex_at_row.add_suffix(self.flex_at)
+        self.flex_alarm = switch("Ring at the start and the end", "", f.nothing_alarm)
+        for row in (self.flex_nothing, self.flex_minutes, self.flex_where, self.flex_at_row, self.flex_alarm):
+            nothing.add(row)
+        page.add(nothing)
+        self.flex_groups = [routine, work, nothing]
+        self._flex_quiet = False
+        self._sync_flex_rows()
+
+    def _sync_flex_rows(self) -> None:
+        on = self.flex_row.get_active()
+        for group in self.flex_groups:
+            group.set_sensitive(on)
+        self.flex_at_row.set_sensitive(self.flex_nothing.get_active())
+        self.flex_minutes.set_sensitive(self.flex_nothing.get_active())
+        self.flex_where.set_sensitive(self.flex_nothing.get_active())
+        self.flex_alarm.set_sensitive(self.flex_nothing.get_active())
+
+    def _on_flex(self, *_args) -> None:
+        if self._flex_quiet:
+            return
+        from dataclasses import replace
+
+        from ...flex import NOTHING_PLACES
+
+        settings = self.ctx.settings
+        self._sync_flex_rows()
+        settings.flexibility = replace(
+            settings.flexibility,
+            enabled=self.flex_row.get_active(), routine=self.flex_routine.get_active(),
+            manual_start=self.flex_start.get_active(), blocks=self.flex_blocks.get_active(),
+            nothing=self.flex_nothing.get_active(), nothing_minutes=int(self.flex_minutes.get_value()),
+            nothing_where=NOTHING_PLACES[self.flex_where.get_selected()], nothing_at=self.flex_at.time,
+            nothing_alarm=self.flex_alarm.get_active(),
+        )
+        self.ctx.changed("flex")
 
     # -- focus -------------------------------------------------------------
 

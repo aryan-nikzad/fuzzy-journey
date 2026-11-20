@@ -3,11 +3,13 @@ from __future__ import annotations
 from datetime import timedelta
 
 from ... import planner
+from ...flex import Phase
 from ...rhythm import DayKind, WorkStatus
 from ...timeutil import countdown, human_duration
 from ...timeutil import now as clock_now
 from ...today import RowState, Slot, TodayView
 from ..context import Context
+from ..flexcard import FlexCard
 from ..focus import FocusCard, TaskList
 from ..gi_setup import Adw, Gtk
 from ..widgets import DayBar, KindSelector, clear, label
@@ -22,7 +24,7 @@ _STATUS = {
 
 
 class TodayPage(Page):
-    listens_to = frozenset({"tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro"})
+    listens_to = frozenset({"tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "flex"})
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
@@ -65,6 +67,8 @@ class TodayPage(Page):
 
         # -- what to do right now
         self.card = FocusCard(ctx)
+        self.flex_card = FlexCard(ctx, self.card)  # Flexibility pack: hidden unless the pack is on
+        self.day_box.append(self.flex_card)
         self.day_box.append(self.card)
 
         # -- shape of the day
@@ -229,6 +233,7 @@ class TodayPage(Page):
         self.stack.set_visible_child_name("day")
         self._render_header(view)
         self._render_hero(view)
+        self.flex_card.update(view)
         self.card.update(view)
         self._render_shape(view)
         planner.add_due_selftest(self.ctx.db, self.ctx.library, view)
@@ -287,7 +292,43 @@ class TodayPage(Page):
         if recovered and view.plan:
             self.recovered.set_subtitle(f"Started {view.plan.wake:%H:%M} · half of the time you are awake")
 
+    def _render_flex_hero(self, view: TodayView) -> bool:
+        """With the Flexibility pack in charge of the work clock, the hero counts focus, not a window."""
+        fx = view.flexpack
+        if fx is None or view.kind.no_work:
+            return False
+        if fx.never_started:
+            self.overline.set_text("TODAY")
+            self.hero.set_text("Not started")
+            self.hero_sub.set_text("Work was not started today.")
+            return True
+        state = fx.state
+        if state is None:
+            return False
+        if state.phase is Phase.ENDED:
+            self.overline.set_text("TODAY")
+            self.hero.set_text("Work ended")
+            self.hero_sub.set_text(f"{human_duration(state.worked)} of focus. The rest of the day is yours.")
+        elif state.phase is Phase.WAITING:
+            self.overline.set_text("FOCUS TODAY")
+            self.hero.set_text(human_duration(state.target))
+            start = f" · your routine ends {fx.routine.end:%H:%M}" if fx.routine else ""
+            self.hero_sub.set_text(f"Waiting for you to start work{start}")
+        else:
+            if state.target_reached:
+                self.overline.set_text("FOCUS DONE")
+                self.hero.set_text(human_duration(state.worked))
+                self.hero_sub.set_text("Today’s focus is reached. End work, or keep going.")
+            else:
+                self.overline.set_text("FOCUS LEFT TODAY")
+                self.hero.set_text(human_duration(state.focus_left))
+                pace = f" · about {state.projected_end:%H:%M} at this pace" if state.projected_end else ""
+                self.hero_sub.set_text(f"{human_duration(state.worked)} worked{pace}")
+        return True
+
     def _render_hero(self, view: TodayView) -> None:
+        if self._render_flex_hero(view):
+            return
         focus = view.focus
         if view.kind is DayKind.OFFLINE:
             self.overline.set_text("TODAY")

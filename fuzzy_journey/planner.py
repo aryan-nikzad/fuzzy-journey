@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta
 
 from .database import Database
+from .flex import FlexInput
 from .models import Task, TaskStatus
 from .prayer_times import PrayerLibrary
 from .rhythm import DayKind
@@ -30,6 +31,7 @@ def build_view(
     slug = db.settings.location.slug
     tomorrow = library.day(slug, day + timedelta(days=1))
     entry = db.day_entries(day, day).get(day)
+    fs = db.settings.flexibility
     return build_today(
         now,
         entry.kind if entry else DayKind.STEADY,
@@ -47,6 +49,8 @@ def build_view(
         pomodoro=db.settings.pomodoro,
         pomodoro_sound=db.settings.pomodoro_sound,
         pomodoro_pauses=db.pomodoro_pauses(day),
+        # Off unless the Flexibility pack is switched on: then the day is built exactly as before.
+        flexpack=FlexInput(fs, tuple(db.routine_items()), db.flex_day(day)) if fs.enabled else None,
     )
 
 
@@ -140,3 +144,65 @@ def closing_due(db: Database, view: TodayView, now: datetime) -> bool:
     if closed or (ask_again_at is not None and now < ask_again_at):
         return False
     return bool(open_tasks(db, view.day)) or settings.closing_reminder
+
+
+# --------------------------------------------------------------------------
+# The Flexibility pack: the buttons
+# --------------------------------------------------------------------------
+# Each action reads the day as the screen does, so what a button does is always what its label says.
+# They do nothing at all unless the pack is on and the right option is chosen.
+
+
+def start_work(db: Database, library: PrayerLibrary, now: datetime) -> bool:
+    """*Start work*: record the real start of the day and, with flexible blocks, begin the first focus block."""
+    fs = db.settings.flexibility
+    if not fs.controls_work:
+        return False
+    day = now.date()
+    if db.flex_day(day).ended_at is not None:
+        return False
+    if db.flex_day(day).started_at is None:
+        db.start_flex_day(day, now)
+    if fs.use_blocks and not any(r.open for r in db.flex_day(day).runs):
+        return start_block(db, library, now)
+    return True
+
+
+def start_block(db: Database, library: PrayerLibrary, now: datetime) -> bool:
+    """*Start*: begin the next focus block or break (what comes next follows the pomodoro cycle)."""
+    fs = db.settings.flexibility
+    if not fs.use_blocks:
+        return False
+    view = build_view(db, library, now)
+    state = view.flexpack.state if view.flexpack else None
+    if state is None or state.next_kind is None or state.ended_at is not None:
+        return False
+    return db.start_flex_run(now.date(), state.next_kind, now) is not None
+
+
+def stop_block(db: Database, now: datetime) -> bool:
+    """*Stop*: end the running block or break now, early or late. Its true length is what counts."""
+    if not db.settings.flexibility.use_blocks:
+        return False
+    return db.stop_flex_run(now.date(), now)
+
+
+def end_work(db: Database, now: datetime) -> bool:
+    """*End work*: the day's work is over. Any running block stops, and the check-in can begin."""
+    fs = db.settings.flexibility
+    if not fs.controls_work:
+        return False
+    day = now.date()
+    record = db.flex_day(day)
+    if record.started_at is None or record.ended_at is not None:
+        return False
+    db.end_flex_day(day, now)
+    return True
+
+
+def resume_work(db: Database, now: datetime) -> bool:
+    """Take back *End work*, for a press that was a mistake."""
+    if not db.settings.flexibility.controls_work or db.flex_day(now.date()).ended_at is None:
+        return False
+    db.reopen_flex_day(now.date())
+    return True

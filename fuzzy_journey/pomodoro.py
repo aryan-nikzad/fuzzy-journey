@@ -218,6 +218,10 @@ def _break_after(count: int, s: PomodoroSettings) -> tuple[SegmentKind, int] | N
     return None
 
 
+#: The same rule, public: the Flexibility pack uses it to say which break a stopped block earns.
+break_after = _break_after
+
+
 # --------------------------------------------------------------------------
 # The clock now
 # --------------------------------------------------------------------------

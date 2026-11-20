@@ -67,3 +67,6 @@ label.fj-warn { color: @warning_color; }
 row.fj-dragging { opacity: .4; }
 row.fj-drop-before { box-shadow: inset 0 3px 0 0 @accent_bg_color; }
 row.fj-drop-after { box-shadow: inset 0 -3px 0 0 @accent_bg_color; }
+
+/* Flexibility pack: the Start work button is the one thing to press, so it is big */
+.fj-cta { font-size: 22px; font-weight: 800; padding: 20px 32px; border-radius: 18px; }

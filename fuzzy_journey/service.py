@@ -42,7 +42,7 @@ def due_rings(db: Database, library: PrayerLibrary, now: datetime) -> list[alarm
         kinds={yesterday: DayKind.STEADY, today: DayKind.STEADY, **kinds},
     )
     settings = db.settings.pomodoro
-    if settings.enabled or settings.planning_enabled:
+    if settings.enabled or settings.planning_enabled or db.settings.flexibility.enabled:
         # The view already counts the user's pauses and holds back what follows an open one.
         events += planner.build_view(db, library, now).pomodoro_events
     return rings + alarms.claim_due_events(db, events, now)
