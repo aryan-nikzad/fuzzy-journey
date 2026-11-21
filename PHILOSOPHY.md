@@ -59,6 +59,19 @@ No account, no cloud. Alarms ring without internet.
 - Not a productivity score. There are no streaks, no points, nothing to feel bad about.
 - Not a prayer-time app. Prayer times are the *frame* of the day; the app does not teach or judge your practice. The five prayers can be ticked off as zero-length tasks, but that is only your own record: no streaks, no scores, never counted as focus time. If you do not pray, switch them off in Preferences: the timetable still frames the day, and nothing is deleted.
 
+## Goals and self-image: words, not arithmetic
+
+Two pages hold the person's own words and nothing more. **Goals** keeps one great goal and the horizons that must be reached before it is possible. **Self-image** keeps who you are, said in the present tense as if it were already true. Like Rules, they never change the schedule, have no scores or streaks, and exist so the plan in your head stays pointed somewhere. They are part of **Recall**, because they are things to know by heart.
+
+## Your goal and who you are, on Today
+
+Goals and self-image are kept on their own pages, and a little of them rises to Today: one card with your great goal
+(and the next horizon) and one self-image statement a day, taken in the order you keep them so each comes round.
+Because the plan should live in your head and not on a screen, the card by default only *asks you to say them aloud
+first* and shows the words when you tap, the same retrieval Recall is built on. You can choose to have the words simply
+shown, or no card at all. It is only a reading of your own words: it never changes the schedule, scores nothing, and
+does not exist until you have written something.
+
 ## When the day goes wrong: a Recovered day
 
 Sometimes you wake late. The Steady plan then asks for work that has already slipped away, so the day is rescued instead of abandoned. On a **Recovered** day the day begins when you really woke, and work is half of the time you are awake from then to Isha. It may run into the afternoon, which is the one place the afternoon is not yours.

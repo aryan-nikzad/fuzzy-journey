@@ -1,6 +1,54 @@
 # Changelog
 
-## Unreleased
+## 3.0.0
+
+Version 3 is a tidy-up, not a new idea. Two years of features had piled up fifteen tabs, a Preferences window with
+nothing in the right place, and a thousand lines of dead 1.x code. Nothing you wrote is touched, no rule of the
+day changes, and every behaviour that carries the philosophy (the friction before night work, the check-in that
+never traps you, no scores, no streaks, nothing invented for you) is exactly as it was. What changed is where things
+live, so there is less to hold in your head.
+
+### Five places instead of fifteen tabs
+- **Today**, **Plan**, **Mind**, **Track**, **Ideas**. `Ctrl+1` to `Ctrl+5` open them.
+  - **Plan**: Tomorrow, Routine, Alarms, Prayers (and Morning, with the Flexibility pack).
+  - **Mind**: Goals, Self-image, Rules, Recovery, Recall: everything you are meant to know by heart.
+  - **Track**: Habits, Bank (and Work log, with the pack).
+- A section with one page (Today, Ideas) shows no sub-navigation. A page you turn off (Habits, the pack's pages)
+  simply leaves its section, and you stay in that section instead of being sent elsewhere.
+- Every page keeps its own name, so nothing that opened a page before opens a different one now.
+
+### Today is calmer
+- What to do comes first: the work left, the block you are in, then your tasks. How the day is shaped (the bar and
+  Steady / Push / Rest) comes after.
+- The four rare changes (*I overslept…*, *A hard day…*, *Add evening work…*, *Work into the night…*) sit behind one
+  quiet **Change the day…** button instead of four loose ones. Each still asks exactly what it asked before.
+- **New: your goal and who you are.** One card with your great goal (and the next horizon) and one self-image
+  statement a day, chosen in the order you keep them. Because your plan should live in your head, by default the card
+  only *asks you to say them aloud first* and shows them when you tap, the same practice as Recall. Preferences →
+  *Mind & Track* can show them outright, or hide the card. With no goal and no statements written, there is no card.
+  It is only a reading of your own words and never changes the day.
+
+### Preferences, regrouped
+- Five pages with one question each: **General** (how it looks, where you are), **Focus** (how work runs),
+  **Mind & Track** (what those two sections show), **Flexibility** (the optional pack), **Data** (backup, tray, your
+  files). Backup and the tray used to sit under Focus. No setting was added except the one above, none removed.
+
+### Removed
+- The 1.x code nothing used any more (`gui.py`, `alarm_engine.py`, `alarm_daemon.py` and their tests), and two
+  duplicate copies of the timetable at the repository root. `make test` is now fully green.
+- The old promotional draft moved to `docs/archive/`.
+
+### Fixed
+- Several screens (Bank, Prayers, Routine, Morning, Alarms, the date picker) read the computer's clock directly
+  instead of the app's, so a pinned clock and the real one could disagree. They now share one.
+
+### Goals and Self-image
+- **Goals** is a page for one **great goal** (what your life is aimed at) and its **horizons**: the sub-goals that must be reached first, kept in the order to reach them. Each horizon can be marked reached and reordered; the first one not yet reached is highlighted as next. The page shows "2 of 5 reached", never a score or a streak.
+- **Self-image** is a page for who you are, written in the present tense as if already true ("I have full control over my life"). Each statement can carry a line on how it feels. A statement that begins as a promise or a wish ("I will…", "I want…", "I'm going to…") is not saved; the dialog asks for it in the present tense.
+- Both pages are words only, like Rules: nothing reads them to plan a day. Nothing is seeded; every word is yours.
+- **Recall** now also hides and tests your great goal, horizons and self-image statements.
+- The pages sit after Recall, so no `Ctrl+1`..`Ctrl+9` shortcut moves.
+- Schema 13 adds the `goals` and `self_image` tables (kept in the backup like everything else). New module `goals.py` (no GTK).
 
 ### Hard days, Recall, and settling at any time
 - **Disruption mode.** *A hard day…* on Today switches the day to **Work 25%** (a quarter of a normal day's work; prayers, exercise and routine carry on) or **Stay home, computer off** (no work; routine optional). Both are neutral for the bank, take no evening or night work, can be undone with *Back to normal*, and show on the Bank calendar. Work alarms stay silent on an Offline day. Schema 8 adds one `day_entries.disruption` column; older versions read such a day as Steady.

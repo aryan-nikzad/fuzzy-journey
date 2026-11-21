@@ -12,6 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fuzzy_journey.database import Database  # noqa: E402
+from fuzzy_journey.goals import KIND_GREAT, KIND_HORIZON, Goal, SelfStatement  # noqa: E402
 from fuzzy_journey.models import Activity, Alarm, PrayerAlarm, Sound, Task, TaskStatus  # noqa: E402
 from fuzzy_journey.rhythm import DayKind  # noqa: E402
 
@@ -41,6 +42,11 @@ def main() -> None:
     db.set_task_status(done.id, TaskStatus.DONE)
     for title, minutes in (("Plan the release", 60), ("Prepare the talk", 120)):
         db.save_task(Task(title, minutes, today + timedelta(days=1)))
+    db.save_goal(Goal(KIND_GREAT, "A calm life that is useful to the people I love"))
+    for title in ("Stable income from my own work", "A body that is strong and rested"):
+        db.save_goal(Goal(KIND_HORIZON, title))
+    for text in ("I have full control over my life", "I finish what I start, calmly"):
+        db.save_self_statement(SelfStatement(text))
     print("Seeded", db.path)
 
 

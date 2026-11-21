@@ -70,8 +70,8 @@ class UiSmokeTests(unittest.TestCase):
         cls._tmp.cleanup()
 
     def test_every_page_renders_and_refreshes(self):
-        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "bank", "alarms", "prayers", "rules", "recovery", "recall", "habits", "ideas", "morning", "worklog"])
-        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "principles", "habits", "flex"):
+        self.assertEqual(list(self.window.pages), ["today", "tomorrow", "routine", "alarms", "prayers", "morning", "goals", "self", "rules", "recovery", "recall", "habits", "bank", "worklog", "ideas"])
+        for scope in ("all", "tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "principles", "goals", "self", "habits", "flex"):
             self.ctx.changed(scope)
 
     # -- the Flexibility pack ----------------------------------------------
@@ -83,19 +83,18 @@ class UiSmokeTests(unittest.TestCase):
         ctx.settings.flex_pack = False
         ctx.changed("flex")
         for name in ("morning", "worklog"):
-            self.assertFalse(w.stack.get_page(w.pages[name]).get_visible())
+            self.assertFalse(w.page_visible(name))
         self.assertFalse(w.pages["today"].flex_card.get_visible())
         ctx.settings.flexibility = FlexSettings(enabled=True, manual_start=True)
         ctx.changed("flex")
-        self.assertTrue(w.stack.get_page(w.pages["morning"]).get_visible())
-        self.assertTrue(w.stack.get_page(w.pages["worklog"]).get_visible())
+        self.assertTrue(w.page_visible("morning"))
+        self.assertTrue(w.page_visible("worklog"))
         ctx.settings.flex_pack = False
         ctx.changed("flex")
-        self.assertFalse(w.stack.get_page(w.pages["morning"]).get_visible())
+        self.assertFalse(w.page_visible("morning"))
         self.assertFalse(w.pages["today"].flex_card.get_visible())
 
     def test_start_work_end_work_walk_through_the_card(self):
-        from datetime import timedelta
         from fuzzy_journey import planner
         from fuzzy_journey.flex import FlexSettings, RoutineItem
         from fuzzy_journey.timeutil import now as clock_now
@@ -193,6 +192,68 @@ class UiSmokeTests(unittest.TestCase):
         self.assertEqual(len(self.ctx.db.list_principles(SECTION_RULES)), before)
         self.assertNotIn("Phone off at night", self._texts(page.cards))
         self.assertIsInstance(item, Principle)
+
+    def test_the_goals_page_shows_the_great_goal_and_its_horizons(self):
+        from fuzzy_journey.goals import KIND_GREAT, KIND_HORIZON, Goal
+        from fuzzy_journey.ui.dialogs.goal_dialog import GoalDialog
+
+        page = self.window.pages["goals"]
+        self.assertIn("Name the one goal your life is aimed at.", self._texts(page.great))
+
+        dialog = GoalDialog(self.window, self.ctx, KIND_GREAT)
+        dialog.title_row.set_text("A free and useful life")
+        self.assertTrue(dialog.save())
+        dialog.destroy()
+        self.assertIn("A free and useful life", self._texts(page.great))
+
+        empty = GoalDialog(self.window, self.ctx, KIND_HORIZON)
+        self.assertFalse(empty.save())  # a horizon needs a title
+        empty.destroy()
+        for title in ("Debt free", "Own my work"):
+            horizon = GoalDialog(self.window, self.ctx, KIND_HORIZON)
+            horizon.title_row.set_text(title)
+            self.assertTrue(horizon.save())
+            horizon.destroy()
+        self.assertEqual(self._texts(page.list).count("Debt free"), 1)
+        self.assertIn("0 of 2 reached", page.summary.get_text())
+
+        first = self.ctx.db.horizons()[0]
+        self.ctx.db.set_horizon_reached(first.id, True)
+        self.ctx.changed("goals")
+        self.assertIn("1 of 2 reached", page.summary.get_text())
+
+        for goal in [self.ctx.db.great_goal(), *self.ctx.db.horizons()]:
+            self.ctx.db.delete_goal(goal.id)
+        self.ctx.changed("goals")
+        self.assertIsInstance(first, Goal)
+
+    def test_the_self_image_page_wants_the_present_tense(self):
+        from fuzzy_journey.ui.dialogs.self_dialog import SelfDialog
+
+        page = self.window.pages["self"]
+        self.assertTrue(self._texts(page.cards))  # the empty hint
+
+        future = SelfDialog(self.window, self.ctx)
+        future.statement_row.set_text("I will have full control over my life")
+        self.assertFalse(future.save())
+        future.destroy()
+        self.assertEqual(self.ctx.db.list_self_image(), [])
+
+        now = SelfDialog(self.window, self.ctx)
+        now.statement_row.set_text("I have full control over my life")
+        now.text.get_buffer().set_text("Calm. I decide what comes next.")
+        self.assertTrue(now.save())
+        now.destroy()
+        shown = self._texts(page.cards)
+        self.assertIn("I have full control over my life", shown)
+        self.assertIn("Calm. I decide what comes next.", shown)
+
+        recall = self.window.pages["recall"]
+        titles = [row.item.title for row in recall._rows]
+        self.assertIn("I have full control over my life", titles)
+        for item in self.ctx.db.list_self_image():
+            self.ctx.db.delete_self_statement(item.id)
+        self.ctx.changed("self")
 
     def test_the_recovery_page_lists_the_steps_in_order_and_can_test_memory(self):
         page = self.window.pages["recovery"]
@@ -479,16 +540,102 @@ class UiSmokeTests(unittest.TestCase):
         self.assertEqual((habit.name, habit.kind, habit.start), ("Gym", QUIT, date(2026, 10, 20)))
 
     def test_the_habit_page_can_be_hidden_and_shown_again(self):
-        stack_page = self.window.stack.get_page(self.window.pages["habits"])
-        self.assertTrue(stack_page.get_visible())
+        self.assertTrue(self.window.page_visible("habits"))
         self.window.show_page("habits")
+        self.assertEqual(self.window.current_page(), "habits")
         self.ctx.settings.habit_calendar = False
         self.ctx.changed("habits")
-        self.assertFalse(stack_page.get_visible())
-        self.assertEqual(self.window.stack.get_visible_child_name(), "today")  # it does not strand you there
+        self.assertFalse(self.window.page_visible("habits"))
+        self.assertEqual(self.window.current_page(), "bank")  # it does not strand you on a hidden page
+        self.assertEqual(self.window.stack.get_visible_child_name(), "track")  # and keeps you in the same place
         self.ctx.settings.habit_calendar = True
         self.ctx.changed("habits")
-        self.assertTrue(stack_page.get_visible())
+        self.assertTrue(self.window.page_visible("habits"))
+
+    # -- the five sections ---------------------------------------------------
+
+    def test_the_app_is_five_sections_and_every_page_has_one_home(self):
+        w = self.window
+        self.assertEqual([k for k, *_ in w.SECTIONS], ["today", "plan", "mind", "track", "ideas"])
+        homed = [name for *_, names in w.SECTIONS for name in names]
+        self.assertEqual(sorted(homed), sorted(w.pages))  # nothing is lost, nothing is in two places
+        for index, (key, *_rest) in enumerate(w.SECTIONS):  # Ctrl+1 to Ctrl+5
+            w.page_index(index)
+            self.assertEqual(w.stack.get_visible_child_name(), key)
+        w.page_index(7)  # there is no sixth section: nothing happens
+        self.assertEqual(w.stack.get_visible_child_name(), "ideas")
+
+    def test_a_page_opens_inside_its_section_by_its_own_name(self):
+        w = self.window
+        for name, section in (("recall", "mind"), ("goals", "mind"), ("alarms", "plan"), ("bank", "track")):
+            w.show_page(name)
+            self.assertEqual((w.stack.get_visible_child_name(), w.current_page()), (section, name))
+        w.show_page("today")
+        w.show_page("worklog")  # a hidden page does not open
+        self.assertEqual(w.current_page(), "today")
+
+    def test_a_section_of_one_page_has_no_sub_navigation(self):
+        from fuzzy_journey.ui.pages.section import Section
+
+        w = self.window
+        self.assertNotIsInstance(w.sections["today"], Section)
+        self.assertNotIsInstance(w.sections["ideas"], Section)
+        mind = w.sections["mind"]
+        self.assertEqual(mind.visible_names(), ["goals", "self", "rules", "recovery", "recall"])
+        self.assertTrue(mind.bar.get_visible())
+
+    def test_no_page_needs_more_than_the_windows_smallest_width(self):
+        from gi.repository import Gtk
+
+        for name, page in self.window.pages.items():
+            self.assertLessEqual(page.measure(Gtk.Orientation.HORIZONTAL, -1)[0], 480, name)
+        self.assertLessEqual(self.window.measure(Gtk.Orientation.HORIZONTAL, -1)[0], 480)
+
+    # -- the anchor on Today -----------------------------------------------------
+
+    def test_the_anchor_asks_first_and_shows_only_what_you_wrote(self):
+        from fuzzy_journey.goals import ANCHOR_OFF, ANCHOR_SHOW, ANCHOR_TAP, Goal, SelfStatement
+
+        anchor, db = self.window.pages["today"].anchor, self.ctx.db
+        existing_goal, existing_self = db.great_goal(), db.list_self_image()
+        self.assertTrue(existing_goal is None and not existing_self)  # nothing is seeded
+        self.ctx.settings.anchor_mode = ANCHOR_TAP
+        self.ctx.changed("anchor")
+        self.assertFalse(anchor.get_visible())  # no words of yours: no card, no nagging
+        db.save_goal(Goal("great", "A calm life that helps others"))
+        db.save_self_statement(SelfStatement("I have full control over my life"))
+        self.addCleanup(self._clear_words)
+        self.ctx.changed("goals")
+        self.assertTrue(anchor.get_visible())
+        self.assertFalse(anchor.goal_box.get_visible())  # the plan lives in the head: say it first
+        self.assertFalse(anchor.self_box.get_visible())
+        anchor._on_tap()
+        self.assertTrue(anchor.goal_box.get_visible() and anchor.self_box.get_visible())
+        self.assertEqual(anchor.goal_line.get_text(), "A calm life that helps others")
+        self.assertEqual(anchor.self_line.get_text(), "I have full control over my life")
+        anchor._on_tap()
+        self.assertFalse(anchor.goal_box.get_visible())
+        self.ctx.settings.anchor_mode = ANCHOR_SHOW
+        self.ctx.changed("anchor")
+        self.assertTrue(anchor.goal_box.get_visible())
+        self.ctx.settings.anchor_mode = ANCHOR_OFF
+        self.ctx.changed("anchor")
+        self.assertFalse(anchor.get_visible())
+        self.ctx.settings.anchor_mode = ANCHOR_TAP
+
+    def _clear_words(self):
+        db = self.ctx.db
+        for goal in [db.great_goal(), *db.horizons()]:
+            if goal:
+                db.delete_goal(goal.id)
+        for item in db.list_self_image():
+            db.delete_self_statement(item.id)
+        self.ctx.changed("goals")
+
+    def test_the_rare_changes_to_a_day_sit_behind_one_quiet_button(self):
+        page = self.window.pages["today"]
+        self.assertEqual(page.extras.get_label(), "Change the day…")
+        self.assertIs(page.overslept.get_ancestor(type(page.extras.get_popover())), page.extras.get_popover())
 
     # -- idea bank ---------------------------------------------------------
 
@@ -521,7 +668,7 @@ class UiSmokeTests(unittest.TestCase):
                                                           "Rewrite the landing page"])
         self.assertEqual(len(page._rows()), 3)
         self.assertIn("3 ideas", page.summary.get_text())
-        self.assertEqual(self.window.stack.get_page(page).get_title(), "Ideas")
+        self.assertEqual(self.window.stack.get_page(page).get_title(), "Ideas")  # a section of its own
 
         dialog = IdeaDialog(self.window, self.ctx, page._ideas[2])  # more detail only when there is time
         dialog.title_row.set_text("Rewrite the landing page copy")

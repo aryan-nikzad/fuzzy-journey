@@ -20,8 +20,9 @@ except ImportError:
     )
     sys.modules["requests"] = requests_stub
 
-from prayer_aio import build_schedule, calculate_work_blocks, parse_clock_time
-from datetime import datetime, time
+from datetime import time
+
+from prayer_aio import build_schedule, parse_clock_time
 
 
 class EveningStartTests(unittest.TestCase):

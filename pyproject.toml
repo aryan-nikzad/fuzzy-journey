@@ -1,6 +1,6 @@
 [project]
 name = "fuzzy-journey"
-version = "2.0.0"
+version = "3.0.0"
 description = "A calmer daily rhythm: your day, shaped around prayer and focused work."
 readme = "README.md"
 license = { text = "MIT" }

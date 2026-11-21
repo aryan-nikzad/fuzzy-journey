@@ -15,7 +15,7 @@ export DISPLAY=:98
 trap 'kill $xvfb 2>/dev/null || true' EXIT
 sleep 1
 for scheme in light dark; do
-  for page in today tomorrow routine bank alarms prayers rules recovery recall; do
+  for page in today tomorrow routine bank alarms prayers goals rules recovery recall; do
     FUZZY_JOURNEY_PAGE=$page python3 -c "
 import sys; from fuzzy_journey.database import Database
 Database().settings.theme='$scheme'" 

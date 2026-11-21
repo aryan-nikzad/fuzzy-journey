@@ -41,21 +41,31 @@ To try it without installing: `./run.sh`.
 
 ## Using it
 
-| Screen | What it is for |
-|---|---|
-| **Today** | How much work is left, the pomodoro block you are in (with Pause), the shape of the day from wake to sleep, today's tasks, and a timeline of everything coming. Choose Steady, Push or Rest in one tap. |
-| **Tomorrow** | Plan a day: its focus time, its tasks and its pomodoro schedule. Opens on tomorrow; pick any past, present or future day with the date button. |
-| **Routine** | Your activities (calls, gym, meals, a custom wake or sleep time), when evening work starts, and what each kind of day would ask of you today. |
-| **Bank** | Your balance of rest, and a calendar to mark Push and Rest days, today or in the past. |
-| **Alarms** | Reminders, prayer alarms that follow the timetable, and whether the alarm service is running. |
-| **Prayers** | The timetable for the year. |
-| **Recall** | Test yourself: your rules, recovery plan, today's shape, today's and tomorrow's tasks, prayers, reminders and routine, all hidden. Say each aloud, then tap to check. Nothing is graded or stored. |
-| **Habits** | A private calendar for habits you choose, to quit or to build. Add, rename, reorder and delete them. Each is marked per day (a checkbox and how many times) and counted from its own *Counting from* date, which never erases a day. Weekly and monthly figures appear only after 7 and 30 days have passed. It can be turned off in Preferences. |
-| **Ideas** | A bank for new ideas. Type one line and press Enter: it is saved at the bottom, with nothing else to decide. Drag the handle on the left of any idea to put it where it belongs; **the top idea is the one to follow up first**. Tap an idea to add a note, move it up or down, or delete it. `Ctrl+I` jumps here from any screen with the cursor ready to type. |
-| **Rules** | Your must-do rules of life, in your own words (for example, the computer is for work only). Add, edit and delete them. Words only: they never change the schedule. |
-| **Recovery** | The plan for a day that went wrong, as short numbered steps you can edit and reorder. **Test myself** hides the steps so you can say them from memory first. It is a backup for the plan in your head, never a replacement for it. |
+Five places, and `Ctrl+1` to `Ctrl+5` open them.
 
-Shortcuts: `Ctrl+1`…`Ctrl+9` switch screens, `Ctrl+I` capture an idea, `Ctrl+.` stop a ringing alarm, `Ctrl+,` preferences, `F1` philosophy, `Ctrl+Q` quit.
+| | | |
+|---|---|---|
+| **Today** | | How much work is left, the pomodoro block you are in (with Pause), your tasks, the shape of the day from wake to sleep, and a timeline of everything coming. Choose Steady, Push or Rest in one tap. Your great goal and a self-image statement wait at the top: by default they ask you to say them first, then tap to check. |
+| **Plan** | Tomorrow | Plan a day: its focus time, its tasks and its pomodoro schedule. Opens on tomorrow; pick any past, present or future day with the date button. |
+| | Routine | Your activities (calls, gym, meals, a custom wake or sleep time), when evening work starts, and what each kind of day would ask of you today. |
+| | Alarms | Reminders, prayer alarms that follow the timetable, and whether the alarm service is running. |
+| | Prayers | The timetable for the year. |
+| | Morning | *(Flexibility pack)* your morning routine. |
+| **Mind** | Goals | Your **great goal**, the one thing your life is aimed at, and below it your **horizons**: the sub-goals that must be reached first, in the order to reach them. Mark each reached; the next one is highlighted. Words only. |
+| | Self-image | Who you are, said **as if it is already true** ("I am…", "I have…", never "I will…"). A statement that begins as a promise or a wish is not saved until it is rewritten in the present tense. Words only. |
+| | Rules | Your must-do rules of life, in your own words (for example, the computer is for work only). Words only: they never change the schedule. |
+| | Recovery | The plan for a day that went wrong, as short numbered steps. **Test myself** hides the steps so you can say them from memory first. A backup for the plan in your head, never a replacement for it. |
+| | Recall | Test yourself: your goal, horizons, self-image, rules, recovery plan, today's shape, tasks, prayers, reminders and routine, all hidden. Say each aloud, then tap to check. Nothing is graded or stored. |
+| **Track** | Habits | A private calendar for habits you choose, to quit or to build, counted from each one's own *Counting from* date. Weekly and monthly figures appear only after 7 and 30 days have passed. Can be turned off in Preferences. |
+| | Bank | Your balance of rest, a calendar to mark Push and Rest days (today or in the past), and the work you really did each day. |
+| | Work log | *(Flexibility pack)* when you pressed Start work. |
+| **Ideas** | | A bank for new ideas. Type one line and press Enter: it is saved at the bottom, with nothing else to decide. Drag the handle to put an idea where it belongs; **the top idea is the one to follow up first**. `Ctrl+I` jumps here from anywhere with the cursor ready to type. |
+
+Shortcuts: `Ctrl+1`…`Ctrl+5` open the five places, `Ctrl+I` capture an idea, `Ctrl+.` stop a ringing alarm, `Ctrl+,` preferences, `F1` philosophy, `Ctrl+Q` quit.
+
+### Your goal and who you are, on Today
+
+If you have written a great goal or a self-image, Today shows one card for them. Your plan should live in your head, not on a screen, so by default the card only asks you to say your goal and who you are aloud, and shows the words when you tap: the same practice as **Recall**. The self-image statement changes each day, in the order you keep them. Under Preferences → *Mind & Track* choose **Show them** to have the words simply there, or **Do not show them** to hide the card. It only reads your own words and never changes the day.
 
 **First launch:** the app ships with the 2026 timetable for Shahrekord. For another place or year, open **Menu → Preferences**, set your location, and download the timetable. That is the only time the internet is needed.
 
@@ -75,23 +85,23 @@ A 07:30-08:00 call during Steady work moves the finish from 12:01 to 12:31. The 
 
 For a day when something bad and unpredictable happens (a cold, a death in the family), **A hard day…** on Today switches the day to a quarter of a normal day's work (**Work 25%**), or to **Stay home, computer off**: no work, and you may skip the routine too. Prayers, exercise and the rest of the routine otherwise carry on. Neither touches the bank, neither allows evening or night work, and **Back to normal** undoes it in one click. Tasks that no longer fit wait for you to settle them; nothing is pushed into tomorrow for you.
 
-**Settle today…** and **Plan tomorrow** are under the task list at any hour. If today's focus time is not over yet, settling asks first. **Settle earlier days…** and **Settle today's tasks…** are also in the main menu. *Show the five prayers as tasks* in Preferences turns the prayers off for anyone who does not pray.
+**Settle today…** and **Plan tomorrow** are under the task list at any hour. If today's focus time is not over yet, settling asks first. **Settle earlier days…** and **Settle today's tasks…** are also in the main menu. *Show the five prayers as tasks* in Preferences → *Mind & Track* turns the prayers off for anyone who does not pray.
 
 ## Backup and restore
 
-Preferences → *Backup and restore*. **Back up everything…** writes one `.zip` holding your settings, reminders, routine, tasks, days, habit calendar, ideas, rules, recovery plan, the bank, and your own alarm sounds. **Restore from a backup…** puts it all back, on this computer or a new one. The file is checked before anything changes; a copy of the data you had is kept first (in `backup/` inside the data folder); a backup from an older version is upgraded; one from a newer version is refused with a clear message. It holds your private data (including the habit calendar), so keep it somewhere safe.
+Preferences → *Data* → *Backup and restore*. **Back up everything…** writes one `.zip` holding your settings, reminders, routine, tasks, days, habit calendar, ideas, rules, recovery plan, the bank, and your own alarm sounds. **Restore from a backup…** puts it all back, on this computer or a new one. The file is checked before anything changes; a copy of the data you had is kept first (in `backup/` inside the data folder); a backup from an older version is upgraded; one from a newer version is refused with a clear message. It holds your private data (including the habit calendar), so keep it somewhere safe.
 
 The prayer-time CSV files are deliberately **not** in the backup: they are not app state. Copy them into the data folder or fetch them again, exactly as before; they work on their own.
 
 ## System tray
 
-*Show an icon in the system tray* in Preferences adds a tray icon. Click it to show or hide the window; right-click for *Show*, *Settle today's tasks…* and *Quit*. With the icon on, closing the window hides it in the tray and the app keeps running. It uses the standard StatusNotifierItem protocol, so it works on KDE Plasma, XFCE, Cinnamon and MATE out of the box, and on GNOME with the AppIndicator extension. It never traps you: if no tray is found (or it goes away), closing the window simply closes the app as before. The alarm service is separate and rings either way.
+*Show an icon in the system tray* in Preferences → *Data* adds a tray icon. Click it to show or hide the window; right-click for *Show*, *Settle today's tasks…* and *Quit*. With the icon on, closing the window hides it in the tray and the app keeps running. It uses the standard StatusNotifierItem protocol, so it works on KDE Plasma, XFCE, Cinnamon and MATE out of the box, and on GNOME with the AppIndicator extension. It never traps you: if no tray is found (or it goes away), closing the window simply closes the app as before. The alarm service is separate and rings either way.
 
 ## The habit calendar
 
 **Habits** is a private page for habits *you* choose. Press **Add a habit**, name it, and say whether you want to **quit** it (do less of it) or **build** it (do more of it). A few ideas are offered, such as exercise, reading, smoking or social media; nothing is added until you pick it. You can rename, reorder or delete a habit at any time (the pencil button); deleting removes its marked days too.
 
-Each habit is marked per day with a checkbox (*happened* or *done*) and a count of times, and counted from its own **Counting from** date. Moving that date changes only what the figures include: earlier days keep their marks and stay editable, nothing is wiped. The figures are the last 7 days, the last 30 days and the whole time since the start (times, times a day, and the days it happened against the days without, or for a habit you are building, the days done against the days missed). A figure is never shown early: the weekly one needs seven finished days since the start, the monthly one thirty, and the page says how many days are still to go. Today is counted tomorrow, when it is finished. On the calendar, a day is tinted orange when a habit you are quitting happened, green when a habit you are building was done, and split when both. Turn the page off in Preferences (*Habit calendar*); that hides it and keeps your data.
+Each habit is marked per day with a checkbox (*happened* or *done*) and a count of times, and counted from its own **Counting from** date. Moving that date changes only what the figures include: earlier days keep their marks and stay editable, nothing is wiped. The figures are the last 7 days, the last 30 days and the whole time since the start (times, times a day, and the days it happened against the days without, or for a habit you are building, the days done against the days missed). A figure is never shown early: the weekly one needs seven finished days since the start, the monthly one thirty, and the page says how many days are still to go. Today is counted tomorrow, when it is finished. On the calendar, a day is tinted orange when a habit you are quitting happened, green when a habit you are building was done, and split when both. Turn the page off in Preferences → *Mind & Track* (*Show the habit calendar*); that hides it and keeps your data.
 
 ## The Idea Bank
 
@@ -101,7 +111,7 @@ Tap an idea (or the pencil) when you have time to say more: you can write a note
 
 ## Regular self-tests
 
-In Preferences, *Add a self-test task* adds a **Test myself** task to Today at each prayer time, or every few hours from when you wake until bed. It is a zero-length task: tick it after you have said your rules, plan and day from memory (its **Open Recall** button takes you to the Recall page). Like the prayers it is only a record for you: never focus time, never carried to another day, never asked about in a review. Only the most recent due test is added, so a day you were away from the computer does not pile up. The background alarm service adds it too, with a quiet notification, even when the window is closed.
+In Preferences → *Mind & Track*, *Add a self-test task* adds a **Test myself** task to Today at each prayer time, or every few hours from when you wake until bed. It is a zero-length task: tick it after you have said your rules, plan and day from memory (its **Open Recall** button takes you to the Recall page). Like the prayers it is only a record for you: never focus time, never carried to another day, never asked about in a review. Only the most recent due test is added, so a day you were away from the computer does not pile up. The background alarm service adds it too, with a quiet notification, even when the window is closed.
 
 ## When you overslept: a Recovered day
 
