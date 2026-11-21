@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import time, timedelta
 
 from ...rhythm import DayKind, plan_day
 from ...timeutil import human_duration, mask_label
+from ...timeutil import now as clock_now
 from ..context import Context
 from ..dialogs.activity_dialog import ActivityDialog
 from ..gi_setup import Adw, Gtk
@@ -87,7 +88,7 @@ class RoutinePage(Page):
         for row in self._plan_rows:
             self.plans.remove(row)
         self._plan_rows.clear()
-        today = datetime.now().date()
+        today = clock_now().date()
         prayer_day = self.ctx.library.day(self.ctx.location.slug, today)
         self.plans.set_visible(prayer_day is not None)
         if not prayer_day:

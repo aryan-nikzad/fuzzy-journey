@@ -16,14 +16,13 @@ from pathlib import Path
 
 from . import selftest
 from .flex import (
-    BUFFER_DEFAULT,
+    AFTER_WORK,
     BUFFER_RANGE,
     MAX_ROUTINE_ITEMS,
     NOTHING_DEFAULT,
     NOTHING_DEFAULT_AT,
     NOTHING_PLACES,
     NOTHING_RANGE,
-    AFTER_WORK,
     FlexDay,
     FlexSettings,
     RoutineItem,
@@ -31,6 +30,8 @@ from .flex import (
     check_routine_item,
 )
 from .goals import (
+    ANCHOR_MODES,
+    ANCHOR_TAP,
     KIND_GREAT,
     KIND_HORIZON,
     MAX_HORIZONS,
@@ -1785,6 +1786,17 @@ class Settings:
     @habit_calendar.setter
     def habit_calendar(self, value: bool) -> None:
         self.set("habit_calendar", "1" if value else "0")
+
+    @property
+    def anchor_mode(self) -> str:
+        """How Today shows your great goal and one self-image statement: ``tap`` (say it, then check),
+        ``show`` or ``off``. Only a reading of your own words; it never changes the day."""
+        mode = self.get("anchor_mode", ANCHOR_TAP)
+        return mode if mode in ANCHOR_MODES else ANCHOR_TAP
+
+    @anchor_mode.setter
+    def anchor_mode(self, value: str) -> None:
+        self.set("anchor_mode", value if value in ANCHOR_MODES else ANCHOR_TAP)
 
     @property
     def tray_icon(self) -> bool:

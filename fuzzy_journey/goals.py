@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date
 
 KIND_GREAT = "great"
 KIND_HORIZON = "horizon"
@@ -121,3 +122,28 @@ def reached_count(horizons: list[Goal]) -> tuple[int, int]:
 def next_horizon(horizons: list[Goal]) -> Goal | None:
     """The first horizon, in order, that is not reached yet."""
     return next((h for h in horizons if not h.reached), None)
+
+
+# -- the anchor on Today ---------------------------------------------------
+#
+# The plan should live in your head, not on a screen. So by default Today does not show your goal and
+# self-image: it asks you to say them from memory and only then lets you check. Showing them outright,
+# or not at all, are the two other choices. It is only a reading of your own words: it never changes the day.
+
+ANCHOR_TAP = "tap"    # a cue; say it aloud, tap to check (the default, the same practice as Recall)
+ANCHOR_SHOW = "show"  # the words are simply there
+ANCHOR_OFF = "off"    # nothing on Today
+ANCHOR_MODES = (ANCHOR_TAP, ANCHOR_SHOW, ANCHOR_OFF)
+ANCHOR_LABELS = {
+    ANCHOR_TAP: "Ask me to say them, then check",
+    ANCHOR_SHOW: "Show them",
+    ANCHOR_OFF: "Do not show them",
+}
+
+
+def statement_of_the_day(statements: list[SelfStatement], day: date) -> SelfStatement | None:
+    """One self-image statement for a day. It stays the same all day and moves on to the next tomorrow,
+    in the order the person keeps them, so each one comes round and none is favoured."""
+    if not statements:
+        return None
+    return statements[day.toordinal() % len(statements)]

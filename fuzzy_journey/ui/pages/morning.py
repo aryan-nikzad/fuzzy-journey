@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 
 from ...flex import BUFFER_RANGE, routine_plan
 from ...timeutil import human_duration
+from ...timeutil import now as clock_now
 from ..context import Context
 from ..dialogs.routine_dialog import RoutineItemDialog
 from ..gi_setup import Adw, Gtk
@@ -112,7 +113,7 @@ class MorningPage(Page):
         self._today_rows.clear()
         fs = self.ctx.settings.flexibility
         self.buffer.set_value(fs.buffer)
-        today = datetime.now().date()
+        today = clock_now().date()
         prayers = self.ctx.library.day(self.ctx.location.slug, today)
         start = datetime.combine(today, prayers.fajr) if prayers else None
         plan = routine_plan(start, items, fs.buffer) if start else None

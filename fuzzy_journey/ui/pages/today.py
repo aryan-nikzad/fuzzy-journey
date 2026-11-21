@@ -8,6 +8,7 @@ from ...rhythm import DayKind, WorkStatus
 from ...timeutil import countdown, human_duration
 from ...timeutil import now as clock_now
 from ...today import RowState, Slot, TodayView
+from ..anchor import AnchorCard
 from ..context import Context
 from ..flexcard import FlexCard
 from ..focus import FocusCard, TaskList
@@ -24,7 +25,8 @@ _STATUS = {
 
 
 class TodayPage(Page):
-    listens_to = frozenset({"tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "flex"})
+    listens_to = frozenset({"tick", "day", "rhythm", "alarms", "data", "location", "tasks", "pomodoro", "flex",
+                            "goals", "self", "anchor"})
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
@@ -56,6 +58,10 @@ class TodayPage(Page):
         top.append(self.bank_button)
         self.day_box.append(top)
 
+        # -- your goal and who you are (asks first; see AnchorCard)
+        self.anchor = AnchorCard(ctx)
+        self.day_box.append(self.anchor)
+
         # -- hero
         hero = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.overline = label("", "fj-overline")
@@ -70,6 +76,10 @@ class TodayPage(Page):
         self.flex_card = FlexCard(ctx, self.card)  # Flexibility pack: hidden unless the pack is on
         self.day_box.append(self.flex_card)
         self.day_box.append(self.card)
+
+        # -- tasks: what to do comes before how the day is shaped
+        self.tasks = TaskList(ctx)
+        self.day_box.append(self.tasks)
 
         # -- shape of the day
         shape = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -91,19 +101,26 @@ class TodayPage(Page):
         kind_box.append(self.selector)
         self.summary = label("", "caption", "dim-label", wrap=True, xalign=0.5)
         kind_box.append(self.summary)
-        self.extras = Gtk.Box(halign=Gtk.Align.CENTER, spacing=6)
-        self.overslept = Gtk.Button(label="I overslept…", tooltip_text="Start the day later")
-        self.overslept.connect("clicked", lambda _b: self._recover(None))
-        self.night_button = Gtk.Button(label="Work into the night…", tooltip_text="Not recommended")
-        self.night_button.connect("clicked", lambda _b: self._night(0))
-        self.evening_button = Gtk.Button(label="Add evening work…", tooltip_text="Not recommended")
-        self.evening_button.connect("clicked", lambda _b: self._evening(0))
-        self.disrupt = Gtk.Button(label="A hard day…", tooltip_text="Ill, grieving, or too weak to work a normal day")
-        self.disrupt.connect("clicked", lambda _b: self._disrupt(None))
-        for b in (self.overslept, self.disrupt, self.evening_button, self.night_button):
-            b.add_css_class("flat")
-            b.add_css_class("caption")
-            self.extras.append(b)
+        # The four rare changes to a day live behind one quiet button, so the page stays calm.
+        menu = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.extras = Gtk.MenuButton(label="Change the day…", halign=Gtk.Align.CENTER, always_show_arrow=True,
+                                     popover=Gtk.Popover(child=menu))
+        self.extras.add_css_class("flat")
+        self.extras.add_css_class("caption")
+
+        def entry(text: str, tip: str, action):
+            button = Gtk.Button(label=text, tooltip_text=tip, halign=Gtk.Align.FILL)
+            button.add_css_class("flat")
+            button.get_child().set_halign(Gtk.Align.START)
+            button.connect("clicked", lambda _b: (self.extras.popdown(), action()))
+            menu.append(button)
+            return button
+
+        self.overslept = entry("I overslept…", "Start the day later", lambda: self._recover(None))
+        self.disrupt = entry("A hard day…", "Ill, grieving, or too weak to work a normal day",
+                             lambda: self._disrupt(None))
+        self.evening_button = entry("Add evening work…", "Not recommended", lambda: self._evening(0))
+        self.night_button = entry("Work into the night…", "Not recommended", lambda: self._night(0))
         kind_box.append(self.extras)
         self.recovered = Adw.ActionRow(title="Recovered day", activatable=False)
         self.recovered.add_css_class("card")
@@ -147,10 +164,6 @@ class TodayPage(Page):
         self._overtime = 0
         self._evening_minutes = 0
         self.day_box.append(kind_box)
-
-        # -- tasks
-        self.tasks = TaskList(ctx)
-        self.day_box.append(self.tasks)
 
         # -- timeline
         self.timeline = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
@@ -237,6 +250,7 @@ class TodayPage(Page):
         self.card.update(view)
         self._render_shape(view)
         planner.add_due_selftest(self.ctx.db, self.ctx.library, view)
+        self.anchor.update(view.day)
         self.tasks.show_day(view.day, view.schedule.focus_minutes if view.schedule else 0)
         self._render_timeline(view)
 

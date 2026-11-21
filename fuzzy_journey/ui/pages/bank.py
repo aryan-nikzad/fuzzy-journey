@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 from ...models import describe_progress
 from ...rhythm import DayKind
+from ...timeutil import now as clock_now
 from ..context import Context
 from ..gi_setup import Adw, Gtk
 from ..widgets import DateButton, KindSelector, clear, label
@@ -16,8 +17,8 @@ class BankPage(Page):
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
-        self.month = date.today().replace(day=1)
-        self.selected = date.today()
+        self.month = clock_now().date().replace(day=1)
+        self.selected = clock_now().date()
         self._quiet = False
 
         # -- balance
@@ -107,7 +108,7 @@ class BankPage(Page):
     # -- helpers -----------------------------------------------------------
 
     def _counts(self, day: date) -> bool:
-        return self.ctx.settings.bank_start <= day <= date.today()
+        return self.ctx.settings.bank_start <= day <= clock_now().date()
 
     def _shift(self, amount: int) -> None:
         year, month = self.month.year, self.month.month + amount
@@ -175,7 +176,7 @@ class BankPage(Page):
         self.note.set_text(entry.note if entry and counts else "")
         if self.selected < self.ctx.settings.bank_start:
             self.day_note_hint.set_text("Before the bank started counting. This day has no effect.")
-        elif self.selected > date.today():
+        elif self.selected > clock_now().date():
             self.day_note_hint.set_text("A future day. You can classify it once it arrives.")
         elif entry and entry.kind is DayKind.RECOVERED:
             self.day_note_hint.set_text(
@@ -196,7 +197,7 @@ class BankPage(Page):
         for row in self._done_rows:
             self.done_group.remove(row)
         self._done_rows = []
-        today = date.today()
+        today = clock_now().date()
         days = self.ctx.db.progress(today - timedelta(days=13), today)
         units = self.ctx.settings.progress_units
         if not days:
@@ -219,7 +220,7 @@ class BankPage(Page):
             self.grid.attach(label(name, "fj-weekday", xalign=0.5), col, 0, 1, 1)
         last = calendar.monthrange(self.month.year, self.month.month)[1]
         entries = self.ctx.db.day_entries(self.month, self.month.replace(day=last))
-        today = date.today()
+        today = clock_now().date()
         for row, week in enumerate(calendar.Calendar().monthdatescalendar(self.month.year, self.month.month), start=1):
             for col, day in enumerate(week):
                 if day.month != self.month.month:

@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from ... import alarms as rules
 from ...models import PRAYER_NAMES, Alarm, PrayerAlarm, Sound
 from ...timeutil import mask_label
+from ...timeutil import now as clock_now
 from .. import service_control
 from ..context import Context
 from ..dialogs.alarm_dialog import AlarmDialog
@@ -96,7 +97,7 @@ class AlarmsPage(Page):
             self.ctx.changed("alarms")
 
     def _test(self, _button) -> None:
-        due = datetime.now() + timedelta(minutes=1)
+        due = clock_now() + timedelta(minutes=1)
         self.ctx.db.save_alarm(
             Alarm("Test alarm", due.strftime("%H:%M:%S"), 0, due.date().isoformat(), Sound(True, "classic"))
         )
@@ -138,7 +139,7 @@ class AlarmsPage(Page):
             self.reminders.remove(row)
         self._reminder_rows.clear()
         items = self.ctx.db.list_alarms()
-        now = datetime.now()
+        now = clock_now()
         if not items:
             row = Adw.ActionRow(title="No reminders", subtitle="Add one for anything the timetable doesn’t cover.", activatable=False)
             row.add_css_class("dim-label")
@@ -161,7 +162,7 @@ class AlarmsPage(Page):
             self._reminder_rows.append(row)
 
     def _render_prayer_subtitles(self) -> None:
-        day = self.ctx.library.day(self.ctx.location.slug, datetime.now().date())
+        day = self.ctx.library.day(self.ctx.location.slug, clock_now().date())
         for name, expander in self.prayer_rows.items():
             at = day.get(name) if day else None
             expander.set_subtitle(f"{at:%H:%M} today" if at else "No timetable for today")

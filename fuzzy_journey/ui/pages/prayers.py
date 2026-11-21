@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from ...models import PRAYER_NAMES
+from ...timeutil import now as clock_now
 from ..context import Context
 from ..gi_setup import Adw, Gtk
 from ..widgets import clear, label
@@ -14,7 +15,8 @@ class PrayersPage(Page):
 
     def __init__(self, ctx: Context) -> None:
         super().__init__(ctx)
-        self.year = date.today().year
+        self.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)  # the table is wide: scroll it, never squeeze the window
+        self.year = clock_now().date().year
         self.full_year = False
 
         nav = Gtk.Box(spacing=6)
@@ -51,7 +53,7 @@ class PrayersPage(Page):
 
     def _shift(self, amount: int) -> None:
         self.year += amount
-        self.full_year = self.year != date.today().year
+        self.full_year = self.year != clock_now().date().year
         self.scope.set_active(self.full_year)
         self.refresh()
 
@@ -77,7 +79,7 @@ class PrayersPage(Page):
         table = self.ctx.library.table(loc.slug, self.year)
         self.missing.set_visible(table is None)
         self.table.set_visible(table is not None)
-        self.scope.set_sensitive(self.year == date.today().year and table is not None)
+        self.scope.set_sensitive(self.year == clock_now().date().year and table is not None)
         if table is None:
             self.missing.set_description(
                 f"The {self.year} timetable for {loc.name} hasn’t been downloaded. "
@@ -86,7 +88,7 @@ class PrayersPage(Page):
             self.status.set_text("")
             return
 
-        today = date.today()
+        today = clock_now().date()
         days = [d for d in table.ordered() if self.full_year or d.day >= today]
         self.status.set_text(f"{loc.name} · {loc.method_name} · {len(days)} days")
         if not days:

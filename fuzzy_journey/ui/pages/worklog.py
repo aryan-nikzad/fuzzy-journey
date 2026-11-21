@@ -7,7 +7,7 @@ from ...rhythm import productive_between
 from ...timeutil import human_duration
 from ...timeutil import now as clock_now
 from ..context import Context
-from ..gi_setup import Adw, GLib, Gtk
+from ..gi_setup import Adw, Gtk
 from ..widgets import clear, label
 from .base import Page
 

@@ -10,6 +10,7 @@ from ..models import SOUND_PRESETS, Sound
 from ..rhythm import DayKind
 from ..sound import import_custom_audio, play
 from ..timeutil import WEEKDAY_NAMES
+from ..timeutil import now as clock_now
 from .gi_setup import Adw, Gdk, Gio, GLib, GObject, Graphene, Gtk
 
 try:  # Gsk is only needed for rounded clipping
@@ -260,7 +261,7 @@ class DateButton(Gtk.MenuButton):
         self.set_popover(self._popover)
         self._quiet = False
         self._calendar.connect("day-selected", self._on_selected)
-        self._value = value or date.today()
+        self._value = value or clock_now().date()
         self.date = self._value
 
     def _on_selected(self, calendar: Gtk.Calendar) -> None:

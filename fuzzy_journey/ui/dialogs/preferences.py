@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ... import backup
+from ...goals import ANCHOR_LABELS, ANCHOR_MODES
 from ...meta import APP_NAME
 from ...models import CALCULATION_METHODS, PROGRESS_UNITS, Location
 from ...paths import APP_DATA_DIR, ensure_data_dir
@@ -31,10 +32,16 @@ class PreferencesWindow(Adw.PreferencesWindow):
         super().__init__(transient_for=parent, modal=True, title="Preferences", default_width=560, default_height=680)
         self.ctx = ctx
         self.set_search_enabled(False)
+        # Five pages, one question each: how it looks and where you are (General), how work runs (Focus),
+        # what Mind and Track show (Mind & Track), the optional pack (Flexibility), your files (Data).
         page = Adw.PreferencesPage(title="General", icon_name="preferences-system-symbolic")
+        self._mind_page = Adw.PreferencesPage(title="Mind & Track", icon_name="avatar-default-symbolic")
+        self._system_page = Adw.PreferencesPage(title="Data", icon_name="drive-harddisk-symbolic")
         self.add(page)
         self._focus_page()
+        self.add(self._mind_page)
         self._flex_page()
+        self.add(self._system_page)
 
         # -- appearance
         look = Adw.PreferencesGroup(title="Appearance")
@@ -108,7 +115,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
             subtitle=f"{APP_NAME} has no account, no cloud and no telemetry. Alarms never use the network.",
             activatable=False,
         ))
-        page.add(store)
+        self._system_page.add(store)
 
     # -- flexibility pack ---------------------------------------------------
 
@@ -270,14 +277,24 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.order_row.set_selected(ORDER_MODES.index(ctx.settings.task_order))
         self.order_row.connect("notify::selected", self._on_order)
         plan.add(self.order_row)
-        self.prayers_row = Adw.SwitchRow(
-            title="Show the five prayers as tasks",
-            subtitle="Turn off if you do not pray. The prayer times still set when your day starts and ends.",
-        )
-        self.prayers_row.set_active(ctx.settings.show_prayers)
-        self.prayers_row.connect("notify::active", self._on_show_prayers)
-        plan.add(self.prayers_row)
         page.add(plan)
+
+        # -- Mind & Track
+        anchor = Adw.PreferencesGroup(
+            title="Your goal and who you are",
+            description="One great goal and one self-image statement a day, on Today. They are only your own "
+                        "words: they never change the plan.",
+        )
+        self.anchor_row = Adw.ComboRow(
+            title="On Today",
+            subtitle="Your plan should live in your head, not on a screen, so by default Today asks you to say "
+                     "them first.",
+        )
+        self.anchor_row.set_model(Gtk.StringList.new([ANCHOR_LABELS[m] for m in ANCHOR_MODES]))
+        self.anchor_row.set_selected(ANCHOR_MODES.index(ctx.settings.anchor_mode))
+        self.anchor_row.connect("notify::selected", self._on_anchor)
+        anchor.add(self.anchor_row)
+        self._mind_page.add(anchor)
 
         test = Adw.PreferencesGroup(
             title="Test myself",
@@ -296,17 +313,27 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.selftest_hours.connect("notify::value", self._on_selftest)
         test.add(self.selftest_hours)
         self.selftest_hours.set_visible(ctx.settings.selftest_mode == "interval")
-        page.add(test)
+        self._mind_page.add(test)
 
-        privacy = Adw.PreferencesGroup(title="Habit calendar")
+        track = Adw.PreferencesGroup(
+            title="Track",
+            description="Pages you can turn off. Turning one off hides it and keeps your data.",
+        )
         self.habit_row = Adw.SwitchRow(
             title="Show the habit calendar",
-            subtitle="A private page for counting two habits day by day. Turning it off hides the page and keeps your data.",
+            subtitle="A private calendar for habits you want to build or quit.",
         )
         self.habit_row.set_active(ctx.settings.habit_calendar)
         self.habit_row.connect("notify::active", self._on_habit_calendar)
-        privacy.add(self.habit_row)
-        page.add(privacy)
+        track.add(self.habit_row)
+        self.prayers_row = Adw.SwitchRow(
+            title="Show the five prayers as tasks",
+            subtitle="Turn off if you do not pray. The prayer times still set when your day starts and ends.",
+        )
+        self.prayers_row.set_active(ctx.settings.show_prayers)
+        self.prayers_row.connect("notify::active", self._on_show_prayers)
+        track.add(self.prayers_row)
+        self._mind_page.add(track)
 
         safe = Adw.PreferencesGroup(
             title="Backup and restore",
@@ -327,7 +354,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         restore.connect("activated", self._choose_restore_file)
         safe.add(back_up)
         safe.add(restore)
-        page.add(safe)
+        self._system_page.add(safe)
 
         tray = Adw.PreferencesGroup(title="System tray")
         self.tray_row = Adw.SwitchRow(
@@ -338,7 +365,7 @@ class PreferencesWindow(Adw.PreferencesWindow):
         self.tray_row.set_active(ctx.settings.tray_icon)
         self.tray_row.connect("notify::active", self._on_tray)
         tray.add(self.tray_row)
-        page.add(tray)
+        self._system_page.add(tray)
 
         closing = Adw.PreferencesGroup(
             title="Closing the day",
@@ -392,6 +419,10 @@ class PreferencesWindow(Adw.PreferencesWindow):
             done.add(row)
         page.add(done)
         self._sync_focus_rows()
+
+    def _on_anchor(self, *_args) -> None:
+        self.ctx.settings.anchor_mode = ANCHOR_MODES[self.anchor_row.get_selected()]
+        self.ctx.changed("anchor")
 
     def _sync_focus_rows(self) -> None:
         for row, visible in self._pomo_rows:

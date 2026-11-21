@@ -12,6 +12,7 @@ from .context import Context
 from .dialogs.preferences import apply_theme
 from .gi_setup import Adw, GLib, GObject, Gtk
 from .pages.base import Page
+from .pages.section import Section
 
 TICK_SECONDS = 15
 RECORD_EVERY = 4  # ticks: the day's real focus is written down once a minute
@@ -25,11 +26,11 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_size_request(480, 480)
         self.ctx = Context()
         self.pages: dict[str, Page] = {}
-        self._today = date.today()
+        self._today = clock_now().date()
         self._ticks = 0
         self._closing = None  # the open check-in, so only one is ever shown
 
-        self.stack = Adw.ViewStack(vexpand=True)
+        self.stack = Adw.ViewStack(vexpand=True, hhomogeneous=False)  # the five sections
         self._build_pages()
 
         # Tabs in the header when they fit, in a bar at the bottom when the window is narrow.
@@ -62,7 +63,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_content(view)
 
         start_page = os.environ.get("FUZZY_JOURNEY_PAGE")  # used by scripts/screenshots.sh
-        if start_page in self.pages:
+        if start_page in self.pages or start_page in self.sections:
             self.show_page(start_page)
         self.ctx.connect("changed", self._on_changed)
         apply_theme(self.ctx.settings.theme)
@@ -76,25 +77,20 @@ class MainWindow(Adw.ApplicationWindow):
 
     # -- pages -------------------------------------------------------------
 
-    PAGES = (
-        ("today", "Today", "weather-clear-symbolic"),
-        ("tomorrow", "Tomorrow", "daytime-sunrise-symbolic"),
-        ("routine", "Routine", "view-list-symbolic"),
-        ("bank", "Bank", "x-office-calendar-symbolic"),
-        ("alarms", "Alarms", "alarm-symbolic"),
-        ("prayers", "Prayers", "weather-clear-night-symbolic"),
-        ("rules", "Rules", "checkbox-checked-symbolic"),
-        ("recovery", "Recovery", "document-revert-symbolic"),
-        ("recall", "Recall", "dialog-question-symbolic"),
-        # Placed after Recall so no Ctrl+1..9 shortcut moves.
-        ("goals", "Goals", "mark-location-symbolic"),
-        ("self", "Self-image", "avatar-default-symbolic"),
-        ("habits", "Habits", "view-grid-symbolic"),
-        ("ideas", "Ideas", "starred-symbolic"),
-        # Flexibility pack pages: hidden unless the pack is on. They sit last so no shortcut moves.
-        ("morning", "Morning", "weather-few-clouds-symbolic"),
-        ("worklog", "Work log", "document-open-recent-symbolic"),
+    #: The five places the app is made of. Each page lives in exactly one of them, and every page keeps its
+    #: own name, so ``show_page("goals")`` still works: it opens Mind, then Goals.
+    SECTIONS = (
+        ("today", "Today", "weather-clear-symbolic", ("today",)),
+        ("plan", "Plan", "x-office-calendar-symbolic", ("tomorrow", "routine", "alarms", "prayers", "morning")),
+        ("mind", "Mind", "avatar-default-symbolic", ("goals", "self", "rules", "recovery", "recall")),
+        ("track", "Track", "emblem-ok-symbolic", ("habits", "bank", "worklog")),
+        ("ideas", "Ideas", "starred-symbolic", ("ideas",)),
     )
+    TITLES = {
+        "today": "Today", "tomorrow": "Tomorrow", "routine": "Routine", "alarms": "Alarms", "prayers": "Prayers",
+        "morning": "Morning", "goals": "Goals", "self": "Self-image", "rules": "Rules", "recovery": "Recovery",
+        "recall": "Recall", "habits": "Habits", "bank": "Bank", "worklog": "Work log", "ideas": "Ideas",
+    }
 
     def _build_pages(self) -> None:
         from .pages.alarms import AlarmsPage
@@ -103,7 +99,6 @@ class MainWindow(Adw.ApplicationWindow):
         from .pages.habits import HabitsPage
         from .pages.ideas import IdeasPage
         from .pages.morning import MorningPage
-        from .pages.worklog import WorkLogPage
         from .pages.prayers import PrayersPage
         from .pages.recall import RecallPage
         from .pages.recovery import RecoveryPage
@@ -112,40 +107,75 @@ class MainWindow(Adw.ApplicationWindow):
         from .pages.selfimage import SelfImagePage
         from .pages.today import TodayPage
         from .pages.tomorrow import TomorrowPage
+        from .pages.worklog import WorkLogPage
 
         factories = {"today": TodayPage, "tomorrow": TomorrowPage, "routine": RoutinePage, "bank": BankPage,
                      "alarms": AlarmsPage, "prayers": PrayersPage, "rules": RulesPage, "recovery": RecoveryPage,
                      "recall": RecallPage, "goals": GoalsPage, "self": SelfImagePage,
                      "habits": HabitsPage, "ideas": IdeasPage,
                      "morning": MorningPage, "worklog": WorkLogPage}
-        for name, title, icon in self.PAGES:
-            page = factories[name](self.ctx)
-            self.pages[name] = page
-            self.stack.add_titled_with_icon(page, name, title, icon)
+        self.sections: dict[str, Gtk.Widget] = {}
+        self._home: dict[str, str] = {}  # page name -> the section it lives in
+        for key, title, icon, names in self.SECTIONS:
+            if len(names) == 1:  # a section of one page is that page, with no sub-navigation
+                page = factories[names[0]](self.ctx)
+                self.pages[names[0]] = page
+                self.sections[key] = page
+            else:
+                section = Section()
+                for name in names:
+                    page = factories[name](self.ctx)
+                    self.pages[name] = page
+                    section.add(name, self.TITLES[name], page)
+                self.sections[key] = section
+            for name in names:
+                self._home[name] = key
+            self.stack.add_titled_with_icon(self.sections[key], key, title, icon)
         self._show_habits()
         self._show_flex()
+
+    def _set_page_visible(self, name: str, wanted: bool) -> None:
+        section = self.sections[self._home[name]]
+        if isinstance(section, Section):
+            section.set_page_visible(self.pages[name], wanted)
 
     def _show_flex(self) -> None:
         """The pack's pages exist only while the pack is on; turning it off hides them and deletes nothing."""
         fs = self.ctx.settings.flexibility
         for name, wanted in (("morning", fs.use_routine), ("worklog", fs.controls_work)):
-            self.stack.get_page(self.pages[name]).set_visible(wanted)
-            if not wanted and self.stack.get_visible_child() is self.pages[name]:
-                self.show_page("today")
+            self._set_page_visible(name, wanted)
 
     def _show_habits(self) -> None:
         """The habit calendar is a page you can turn off; turning it off hides it and deletes nothing."""
-        on = self.ctx.settings.habit_calendar
-        self.stack.get_page(self.pages["habits"]).set_visible(on)
-        if not on and self.stack.get_visible_child() is self.pages["habits"]:
-            self.show_page("today")
+        self._set_page_visible("habits", self.ctx.settings.habit_calendar)
+
+    def page_visible(self, name: str) -> bool:
+        section = self.sections[self._home[name]]
+        return name in section.visible_names() if isinstance(section, Section) else True
+
+    def current_page(self) -> str:
+        """The name of the page you are looking at."""
+        key = self.stack.get_visible_child_name()
+        section = self.sections[key]
+        return section.inner.get_visible_child_name() if isinstance(section, Section) else key
 
     def page_index(self, index: int) -> None:
-        if 0 <= index < len(self.PAGES):
-            self.show_page(self.PAGES[index][0])
+        """Ctrl+1 to Ctrl+5 open the five sections."""
+        if 0 <= index < len(self.SECTIONS):
+            self.show_page(self.SECTIONS[index][0])
 
     def show_page(self, name: str) -> None:
-        self.stack.set_visible_child_name(name)
+        """Open a section by its name, or a page by its own (which opens the section it lives in)."""
+        if name in self.sections:
+            self.stack.set_visible_child_name(name)
+            return
+        home = self._home.get(name)
+        if home is None or not self.page_visible(name):
+            return
+        self.stack.set_visible_child_name(home)
+        section = self.sections[home]
+        if isinstance(section, Section):
+            section.inner.set_visible_child_name(name)
 
     def capture_idea(self) -> None:
         """Jump to the Idea Bank with the cursor in the quick-add line (Ctrl+I)."""
@@ -177,8 +207,8 @@ class MainWindow(Adw.ApplicationWindow):
             self._check_tasks()
 
     def _tick(self) -> bool:
-        if date.today() != self._today:
-            self._today = date.today()
+        if clock_now().date() != self._today:
+            self._today = clock_now().date()
             self.ctx.changed("all")
             self._check_tasks(prompt=True)
         else:

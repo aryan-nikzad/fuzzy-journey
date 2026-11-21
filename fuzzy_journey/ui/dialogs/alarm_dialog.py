@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timedelta
 
 from ...models import Alarm
 from ...timeutil import ALL_DAYS, parse_clock
+from ...timeutil import now as clock_now
 from ..context import Context
 from ..gi_setup import Adw, Gtk
 from ..widgets import DateButton, DayChooser, SoundEditor, TimeEntry, confirm
@@ -44,7 +45,7 @@ class AlarmDialog(FormDialog):
         repeat.add(self.days_row)
 
         self.date_row = Adw.ActionRow(title="Date")
-        start = date.fromisoformat(a.one_shot_date) if a and a.one_shot_date else date.today()
+        start = date.fromisoformat(a.one_shot_date) if a and a.one_shot_date else clock_now().date()
         self.date_button = DateButton(start)
         self.date_row.add_suffix(self.date_button)
         repeat.add(self.date_row)
@@ -98,7 +99,7 @@ class AlarmDialog(FormDialog):
         alarm.one_shot_date = self.date_button.date.isoformat() if once else None
         alarm.sound = self.sound.sound
         alarm.enabled = self.enabled_row.get_active() if self.alarm else True
-        if once and datetime.combine(self.date_button.date, parse_clock(alarm.time)) < datetime.now() - timedelta(minutes=5):
+        if once and datetime.combine(self.date_button.date, parse_clock(alarm.time)) < clock_now() - timedelta(minutes=5):
             self.error("That moment has already passed.")
             return False
         self.ctx.db.save_alarm(alarm)
